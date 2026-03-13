@@ -35,3 +35,6 @@ app_reload.py
 app_master.py
 app_sshpass.py
 app_paramiko.py
+app_mik_reload.py
+app_autoscan.py
+app_light_version.py

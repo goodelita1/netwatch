@@ -399,24 +399,21 @@ def _http(url, method="GET", data=None, headers=None, login="", password="",
 
 
 def _reboot_mikrotik(ip, login, password) -> dict:
-    """MikroTik RouterOS reboot — REST API → Binary API → SSH (paramiko)."""
-
-    # 1. REST API (RouterOS 7.x)
-    for scheme in ("http", "https"):
+    """MikroTik RouterOS REST API reboot (v7+) with HTTP fallback (v6)."""
+    # Try REST API (RouterOS 7.x)
+    for scheme in ("https", "http"):
         url = f"{scheme}://{ip}/rest/system/reboot"
-        st, _ = _http(url, method="POST", data="{}", login=login, password=password)
+        st, body = _http(url, method="POST", data="{}", login=login, password=password)
         if st in (200, 201, 204):
             return {"ok": True, "method": f"MikroTik REST ({scheme})", "detail": "Команда отправлена"}
-
-    # 2. Binary API port 8728 (RouterOS 6.x)
+    # Fallback: MikroTik API port 8728 (binary protocol)
     try:
-        if _mikrotik_api_reboot(ip, login, password):
-            return {"ok": True, "method": "MikroTik API (8728)", "detail": "Команда отправлена"}
+        result = _mikrotik_api_reboot(ip, login, password)
+        if result: return {"ok": True, "method": "MikroTik API (8728)", "detail": "Команда отправлена"}
     except Exception:
         pass
+    return {"ok": False, "method": "MikroTik", "detail": "Не удалось подключиться. Проверьте логин/пароль и включите REST API."}
 
-    # 3. SSH via paramiko
-    return _reboot_via_ssh(ip, login, password, command="/system reboot")
 
 def _mikrotik_api_encode(word: str) -> bytes:
     """Encode one word for MikroTik binary API."""
@@ -508,83 +505,27 @@ def _reboot_generic_http(ip, login, password) -> dict:
     return {"ok": False, "method": "Generic HTTP", "detail": "Нет ответа от известных reboot-эндпоинтов"}
 
 
-def _reboot_via_ssh(ip, login, password, command="/system reboot") -> dict:
-    """SSH reboot using paramiko — pure Python, no sshpass needed.
-    Install: pip install paramiko
-    """
-    try:
-        import paramiko
-    except ImportError:
-        return {"ok": False, "method": "SSH",
-                "detail": "Установите paramiko: pip install paramiko"}
-
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    try:
-        client.connect(ip, port=22, username=login, password=password,
-                       timeout=10, allow_agent=False, look_for_keys=False)
-
-        # Try exec_command first — cleaner, works on most RouterOS versions
-        stdin, stdout, stderr = client.exec_command(command, timeout=8)
-        stdin.close()
-
-        # Give RouterOS time to process and initiate reboot
-        time.sleep(2)
-
-        out = stdout.read(512).decode(errors="ignore")
-        err = stderr.read(512).decode(errors="ignore")
-        exit_code = stdout.channel.recv_exit_status()
-
-        client.close()
-
-        # RouterOS returns exit 0 on success; connection may drop mid-read
-        if exit_code in (0, -1):
-            return {"ok": True, "method": "SSH (paramiko / exec)",
-                    "detail": f'Команда "{command}" принята — устройство перезагружается'}
-
-        # If exec_command gave non-zero, fall back to interactive shell
-        raise Exception(f"exec exit={exit_code} err={err.strip()}")
-
-    except Exception as exec_err:
-        # Fallback: invoke_shell (some RouterOS versions need interactive mode)
+def _reboot_via_ssh(ip, login, password) -> dict:
+    """SSH reboot via subprocess (requires ssh binary + sshpass or key auth)."""
+    # Try with sshpass if available
+    for ssh_cmd in (["sshpass", "-p", password, "ssh"], None):
+        if ssh_cmd is None:
+            cmd = ["ssh", "-o", "StrictHostKeyChecking=no",
+                   "-o", "ConnectTimeout=5", f"{login}@{ip}", "reboot"]
+        else:
+            cmd = ssh_cmd + ["-o", "StrictHostKeyChecking=no",
+                             "-o", "ConnectTimeout=5", f"{login}@{ip}", "reboot"]
         try:
-            client2 = paramiko.SSHClient()
-            client2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client2.connect(ip, port=22, username=login, password=password,
-                            timeout=10, allow_agent=False, look_for_keys=False)
+            r = subprocess.run(cmd, capture_output=True, timeout=10)
+            if r.returncode in (0, 1):  # 1 = connection closed after reboot = ok
+                return {"ok": True, "method": "SSH", "detail": "Команда reboot отправлена"}
+        except FileNotFoundError:
+            continue
+        except Exception as ex:
+            return {"ok": False, "method": "SSH", "detail": str(ex)}
+    return {"ok": False, "method": "SSH", "detail": "SSH недоступен на этом сервере"}
 
-            shell = client2.invoke_shell(width=200, height=50)
-            time.sleep(1.0)                        # wait for RouterOS prompt
-            shell.recv(4096)                       # drain welcome banner
 
-            shell.send(command + "\n")
-            time.sleep(2.5)                        # wait for RouterOS to process
-
-            # Drain any confirmation prompt and reply y
-            if shell.recv_ready():
-                resp = shell.recv(1024).decode(errors="ignore")
-                if "y/n" in resp.lower() or "confirm" in resp.lower():
-                    shell.send("y\n")
-                    time.sleep(1.5)
-
-            client2.close()
-            return {"ok": True, "method": "SSH (paramiko / shell)",
-                    "detail": f'Команда "{command}" отправлена — устройство перезагружается'}
-
-        except paramiko.AuthenticationException:
-            return {"ok": False, "method": "SSH (paramiko)",
-                    "detail": "Ошибка аутентификации — проверьте логин и пароль"}
-        except Exception as shell_err:
-            msg = str(shell_err).lower()
-            if "reset" in msg or "eof" in msg or "closed" in msg or "broken" in msg:
-                # Connection dropped = device is rebooting = success
-                return {"ok": True, "method": "SSH (paramiko / shell)",
-                        "detail": "Соединение закрыто устройством — устройство перезагружается"}
-            return {"ok": False, "method": "SSH (paramiko)",
-                    "detail": f"Ошибка: {shell_err}"}
-    finally:
-        try: client.close()
-        except: pass
 VENDOR_REBOOT = {
     "mikrotik":  _reboot_mikrotik,
     "hikvision": _reboot_hikvision,
@@ -600,19 +541,25 @@ def reboot_device(device: dict) -> dict:
     password = device.get("cred_password", "")
     vendor   = (device.get("vendor") or "").lower().strip()
 
-    if not login: login = "admin"
+    if not login:  login = "admin"
     if not password:
-        return {"ok": False, "method": "—",
-                "detail": "Пароль не задан. Добавьте учётные данные в настройках устройства."}
+        return {"ok": False, "method": "—", "detail": "Пароль не задан. Добавьте учётные данные в настройках устройства."}
 
-    # Vendor-specific (MikroTik already tries REST → API → SSH internally)
+    # Vendor-specific first
+    fn = None
     for key, func in VENDOR_REBOOT.items():
         if key in vendor:
-            return func(ip, login, password)
+            fn = func; break
 
-    # Unknown vendor: generic HTTP then SSH
+    if fn:
+        result = fn(ip, login, password)
+        if result["ok"]: return result
+
+    # Generic HTTP fallback
     result = _reboot_generic_http(ip, login, password)
     if result["ok"]: return result
+
+    # SSH last resort
     return _reboot_via_ssh(ip, login, password)
 
 
@@ -669,6 +616,87 @@ def background_auto_ping():
         time.sleep(60)
         try: _do_monitor_scan(deep=False)
         except Exception as e: print(f"[auto-ping] error: {e}")
+
+# ── Auto background scan states ──────────────────────────────────────────────
+auto_discovery_state = {
+    "last_run": None, "new_count": 0, "new_devices": [],
+    "subnets_scanned": [], "running": False
+}
+auto_subnet_state = {
+    "last_run": None, "new_count": 0, "new_subnets": [], "running": False
+}
+
+def _run_auto_discovery():
+    """Scan all registered subnets for unregistered devices (runs every 5 min)."""
+    if auto_discovery_state["running"]: return
+    auto_discovery_state["running"] = True
+    try:
+        subnets = [s["prefix"] for s in load_subnets() if s.get("scan")]
+        if not subnets: return
+        reg = {d["ip"] for d in load_devices()}
+        ips = [f"{s}.{i}" for s in subnets for i in range(1, 255)]
+        found_new = []
+        lock = threading.Lock()
+        def on_result(r):
+            if r["alive"] and r["ip"] not in reg:
+                with lock: found_new.append(r["ip"])
+        run_async_scan(ips, on_result=on_result, max_concurrent=80)
+        srt = lambda lst: sorted(lst, key=lambda x: list(map(int, x.split("."))))
+        auto_discovery_state.update({
+            "last_run": time.time(),
+            "new_count": len(found_new),
+            "new_devices": srt(found_new),
+            "subnets_scanned": subnets,
+        })
+        if found_new:
+            print(f"[auto-discovery] {len(found_new)} unregistered hosts: {found_new}")
+    except Exception as e:
+        print(f"[auto-discovery] error: {e}")
+    finally:
+        auto_discovery_state["running"] = False
+
+def _run_auto_subnet_scan():
+    """Scan 192.168.0-255.1 for unknown subnets (runs every 15 min)."""
+    if auto_subnet_state["running"]: return
+    auto_subnet_state["running"] = True
+    try:
+        reg_prefixes = {s["prefix"] for s in load_subnets()}
+        ips = [f"192.168.{x}.1" for x in range(256)]
+        alive_xs = []
+        lock = threading.Lock()
+        def on_result(r):
+            if r["alive"]:
+                x = int(r["ip"].split(".")[2])
+                with lock: alive_xs.append(x)
+        run_async_scan(ips, on_result=on_result, max_concurrent=64)
+        new_subs = [x for x in alive_xs if f"192.168.{x}" not in reg_prefixes]
+        auto_subnet_state.update({
+            "last_run": time.time(),
+            "new_count": len(new_subs),
+            "new_subnets": sorted(new_subs),
+        })
+        if new_subs:
+            print(f"[auto-subnet] {len(new_subs)} new subnets: {new_subs}")
+    except Exception as e:
+        print(f"[auto-subnet] error: {e}")
+    finally:
+        auto_subnet_state["running"] = False
+
+def background_auto_discovery():
+    """Runs forever — host discovery every 5 minutes."""
+    time.sleep(90)  # initial delay
+    while True:
+        try: _run_auto_discovery()
+        except Exception as e: print(f"[auto-discovery] error: {e}")
+        time.sleep(300)
+
+def background_auto_subnet():
+    """Runs forever — subnet scan every 15 minutes."""
+    time.sleep(180)  # initial delay
+    while True:
+        try: _run_auto_subnet_scan()
+        except Exception as e: print(f"[auto-subnet] error: {e}")
+        time.sleep(900)
 
 def deep_scan():
     """Full scan (ping + ports + MAC + vendor + model) — triggered manually."""
@@ -860,6 +888,11 @@ def start_subnet_scan():
     threading.Thread(target=run_subnet_scan, daemon=True).start()
     return jsonify({"status": "started"})
 
+@app.route("/api/auto_scan/status")
+def auto_scan_status():
+    """Returns auto-discovery + auto-subnet state for the dashboard panel."""
+    return jsonify({"discovery": auto_discovery_state, "subnet": auto_subnet_state})
+
 @app.route("/api/subnet_scan/status")
 def subnet_scan_status():
     reg_prefixes = {s["prefix"] for s in load_subnets()}
@@ -951,12 +984,27 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .fbtn{background:var(--sf);border:1px solid var(--bd);color:var(--muted);padding:5px 11px;border-radius:6px;cursor:pointer;font-family:inherit;font-size:11px;transition:all .18s;}
 .fbtn:hover,.fbtn.active{border-color:var(--acc);color:var(--acc);background:var(--ad);}
 
+/* ── Power status banner ── */
+.power-banner{display:flex;align-items:center;gap:12px;padding:12px 18px;border-radius:10px;margin-bottom:16px;border:1px solid;transition:all .4s;font-size:13px;font-weight:600;}
+.power-on{background:linear-gradient(135deg,#00e67610,#00e67604);border-color:#00e67640;color:var(--green);}
+.power-off{background:linear-gradient(135deg,#ff3d5718,#ff3d5708);border-color:#ff3d5760;color:var(--red);animation:pulse 2s infinite;}
+.power-unk{background:var(--sf);border-color:var(--bd);color:var(--muted);}
+.power-icon{font-size:22px;flex-shrink:0;}
+.power-text{}
+.power-title{font-size:14px;font-weight:700;}
+.power-sub{font-size:11px;opacity:.7;margin-top:1px;}
+
 /* ── Device table ── */
 .sn-sec{margin-bottom:22px;}
 .sn-hdr{display:flex;align-items:center;gap:9px;padding:7px 13px;background:var(--sf);border:1px solid var(--bd);border-radius:8px;margin-bottom:7px;}
 .sn-badge{font-size:11px;color:var(--acc);background:var(--ad);padding:2px 9px;border-radius:4px;font-weight:600;letter-spacing:.5px;}
 /* Columns: status | IP | name | location | vendor/model | type | ping | actions */
 .th{display:grid;grid-template-columns:10px 130px 1fr 1fr 155px 85px 75px 180px;gap:9px;padding:4px 13px;margin-bottom:3px;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;align-items:center;}
+.th span{cursor:pointer;user-select:none;display:flex;align-items:center;gap:3px;transition:color .15s;}
+.th span:hover{color:var(--text);}
+.th span.sort-asc::after{content:"↑";color:var(--acc);}
+.th span.sort-desc::after{content:"↓";color:var(--acc);}
+.th span.sort-asc,.th span.sort-desc{color:var(--acc);}
 .dr{display:grid;grid-template-columns:10px 130px 1fr 1fr 155px 85px 75px 180px;align-items:center;gap:9px;background:var(--sf);border:1px solid var(--bd);border-radius:8px;padding:9px 13px;transition:all .18s;}
 .dr:hover{border-color:#252d3d;background:var(--sf2);}
 .dr.on{border-left:3px solid var(--green);}.dr.off{border-left:3px solid var(--red);opacity:.68;}.dr.unk{border-left:3px solid var(--muted);}
@@ -1066,6 +1114,23 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .chk-wrap input{accent-color:var(--acc);width:12px;height:12px;cursor:pointer;}
 .chk-wrap label{font-size:12px;cursor:pointer;}
 
+/* Auto-scan alert panel */
+.autoscan-panel{background:var(--sf);border:1px solid var(--bd);border-radius:12px;padding:16px 18px;margin-bottom:18px;}
+.autoscan-panel.has-new{border-color:#ffb30060;background:linear-gradient(135deg,#ffb30008,var(--sf));}
+.autoscan-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;}
+.autoscan-hdr h3{font-family:'Syne',sans-serif;font-size:13px;font-weight:700;display:flex;align-items:center;gap:7px;}
+.autoscan-timers{display:flex;gap:12px;flex-wrap:wrap;}
+.autoscan-timer{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px;}
+.autoscan-timer .pulse{width:6px;height:6px;border-radius:50%;background:var(--green);animation:blink 2s infinite;flex-shrink:0;}
+.autoscan-timer .pulse.idle{background:var(--muted);animation:none;}
+.autoscan-body{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+@media(max-width:600px){.autoscan-body{grid-template-columns:1fr;}}
+.autoscan-col h4{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;}
+.autoscan-empty{font-size:11px;color:var(--muted);padding:4px 0;}
+.autoscan-ip{display:flex;align-items:center;gap:7px;padding:5px 9px;background:var(--sf2);border-radius:6px;margin-bottom:3px;font-size:11px;}
+.autoscan-ip .ip-txt{font-weight:700;flex:1;}
+.autoscan-ip .sn-txt{font-size:10px;color:var(--muted);}
+
 /* Modal */
 .modal-ov{display:none;position:fixed;inset:0;background:#00000095;z-index:300;align-items:center;justify-content:center;backdrop-filter:blur(4px);}
 .modal-ov.open{display:flex;}
@@ -1118,6 +1183,39 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 
 <!-- ════ TAB: MONITOR ════ -->
 <div class="tp active" id="tab-monitor">
+
+  <!-- Power status banner -->
+  <div class="power-banner power-unk" id="powerBanner">
+    <div class="power-icon" id="powerIcon">⚡</div>
+    <div class="power-text">
+      <div class="power-title" id="powerTitle">Проверка питания...</div>
+      <div class="power-sub" id="powerSub">Ожидание первого пинга 192.168.88.1</div>
+    </div>
+  </div>
+
+  <!-- Auto-scan results panel -->
+  <div class="autoscan-panel" id="autoscanPanel">
+    <div class="autoscan-hdr">
+      <h3>🤖 Авто-сканирование сети
+        <span style="font-size:10px;font-weight:400;color:var(--muted)">(хосты каждые 5 мин · подсети каждые 15 мин)</span>
+      </h3>
+      <div class="autoscan-timers">
+        <div class="autoscan-timer"><div class="pulse idle" id="discPulse"></div><span id="discTimerLbl">Хосты: ожидание...</span></div>
+        <div class="autoscan-timer"><div class="pulse idle" id="snPulse"></div><span id="snTimerLbl">Подсети: ожидание...</span></div>
+      </div>
+    </div>
+    <div class="autoscan-body">
+      <div>
+        <h4>🔴 Незарегистрированные хосты</h4>
+        <div id="autoDiscList"><div class="autoscan-empty">Ожидание первого скана (~90с после старта)</div></div>
+      </div>
+      <div>
+        <h4>🛰 Новые подсети</h4>
+        <div id="autoSnList"><div class="autoscan-empty">Ожидание первого скана (~3м после старта)</div></div>
+      </div>
+    </div>
+  </div>
+
   <div class="stats">
     <div class="sc"><div class="sc-label">Всего</div><div class="sc-val t" id="sTotal">—</div></div>
     <div class="sc"><div class="sc-label">Онлайн</div><div class="sc-val g" id="sOnline">—</div></div>
@@ -1133,6 +1231,20 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
       <button class="fbtn" onclick="setFilter('router',this)">Роутеры</button>
       <button class="fbtn" onclick="setFilter('camera',this)">Камеры</button>
       <button class="fbtn" onclick="setFilter('ap',this)">WiFi AP</button>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <span style="font-size:10px;color:var(--muted)">Сортировка:</span>
+      <select id="sortSelect" onchange="setSortFromSelect()" style="background:var(--sf);border:1px solid var(--bd);color:var(--text);padding:5px 8px;border-radius:6px;font-family:inherit;font-size:11px;cursor:pointer">
+        <option value="ip-asc">IP ↑</option>
+        <option value="ip-desc">IP ↓</option>
+        <option value="name-asc">Название ↑</option>
+        <option value="name-desc">Название ↓</option>
+        <option value="status-asc">Статус (онлайн)</option>
+        <option value="status-desc">Статус (оффлайн)</option>
+        <option value="latency-asc">Пинг ↑</option>
+        <option value="latency-desc">Пинг ↓</option>
+        <option value="type-asc">Тип ↑</option>
+      </select>
     </div>
   </div>
   <div id="devList"></div>
@@ -1331,6 +1443,75 @@ function latBarWidth(ms){
   return Math.min(100, Math.round(ms/3));
 }
 
+// ── Power status (based on 192.168.88.1) ─────────────────────────────────────
+const POWER_IP = '192.168.88.1';
+
+function updatePowerBanner(devices){
+  const gw = devices.find(d=>d.ip===POWER_IP);
+  const banner = document.getElementById('powerBanner');
+  const icon   = document.getElementById('powerIcon');
+  const title  = document.getElementById('powerTitle');
+  const sub    = document.getElementById('powerSub');
+  if(!gw || gw.online===null || gw.online===undefined){
+    banner.className='power-banner power-unk';
+    icon.textContent='⚡'; title.textContent='Статус питания: неизвестно';
+    sub.textContent=`Ожидание пинга ${POWER_IP}`;
+  } else if(gw.online===true){
+    banner.className='power-banner power-on';
+    icon.textContent='⚡'; title.textContent='Свет есть — питание в норме';
+    sub.textContent=`${POWER_IP} отвечает${gw.latency!=null?' · пинг '+gw.latency+' мс':''}`;
+  } else {
+    banner.className='power-banner power-off';
+    icon.textContent='🔴'; title.textContent='НЕТ СВЕТА — питание отсутствует!';
+    sub.textContent=`${POWER_IP} не отвечает · вероятно отключение электроэнергии`;
+  }
+}
+
+// ── Sort state ────────────────────────────────────────────────────────────────
+let sortKey='ip', sortDir='asc';
+
+const SORT_KEYS = {
+  ip:      (d)=>d.ip.split('.').map(n=>n.padStart(3,'0')).join('.'),
+  name:    (d)=>(d.name||'').toLowerCase(),
+  location:(d)=>(d.location||'').toLowerCase(),
+  type:    (d)=>d.type||'',
+  status:  (d)=>d.online===true?0:d.online===false?1:2,
+  latency: (d)=>d.latency??99999,
+};
+
+function setSortFromSelect(){
+  const val = document.getElementById('sortSelect').value;
+  const [k, dir] = val.split('-');
+  sortKey = k; sortDir = dir||'asc';
+  render();
+}
+
+function setSortFromHeader(key){
+  if(sortKey===key){ sortDir = sortDir==='asc'?'desc':'asc'; }
+  else { sortKey=key; sortDir='asc'; }
+  // sync dropdown
+  const sel = document.getElementById('sortSelect');
+  const target = key+'-'+sortDir;
+  for(let o of sel.options){ if(o.value===target){sel.value=target;break;} }
+  render();
+}
+
+function sortDevices(devs){
+  const fn = SORT_KEYS[sortKey] || SORT_KEYS.ip;
+  return [...devs].sort((a,b)=>{
+    const av=fn(a), bv=fn(b);
+    if(av<bv) return sortDir==='asc'?-1:1;
+    if(av>bv) return sortDir==='asc'?1:-1;
+    return 0;
+  });
+}
+
+function thSpan(label, key){
+  let cls='';
+  if(sortKey===key) cls = sortDir==='asc'?' sort-asc':' sort-desc';
+  return `<span class="${cls}" onclick="setSortFromHeader('${key}')">${label}</span>`;
+}
+
 // ── Monitor render ────────────────────────────────────────────────────────────
 function pfx(ip){return ip.split('.').slice(0,3).join('.');}
 function sc(d){return d.online===true?'on':d.online===false?'off':'unk';}
@@ -1367,6 +1548,10 @@ function render(){
   else if(['router','ap','camera','client','mobile','server'].includes(currentFilter))
     filtered=allDevices.filter(d=>d.type===currentFilter);
 
+  // Apply sort
+  filtered = sortDevices(filtered);
+
+  // Group by subnet prefix (preserve sort order within groups)
   const groups={};
   filtered.forEach(d=>{const p=pfx(d.ip);if(!groups[p])groups[p]=[];groups[p].push(d);});
   const knownPfx=allSubnets.map(s=>s.prefix);
@@ -1374,7 +1559,7 @@ function render(){
 
   let html='';
   keys.forEach(p=>{
-    const devs=groups[p];
+    const devs=groups[p]; // already sorted
     const sn=allSubnets.find(s=>s.prefix===p);
     const label=sn?sn.label:p+'.0/24';
     const onCnt=devs.filter(d=>d.online===true).length;
@@ -1384,7 +1569,16 @@ function render(){
         <span style="font-size:11px;color:var(--muted)">${devs.length} уст.</span>
         <span style="font-size:10px;color:var(--green);margin-left:auto">${onCnt} онлайн</span>
       </div>
-      <div class="th"><span></span><span>IP</span><span>Название</span><span>Расположение</span><span>Вендор / Модель</span><span>Тип</span><span>Пинг</span><span>Действия</span></div>
+      <div class="th">
+        <span></span>
+        ${thSpan('IP','ip')}
+        ${thSpan('Название','name')}
+        ${thSpan('Расположение','location')}
+        <span>Вендор / Модель</span>
+        ${thSpan('Тип','type')}
+        ${thSpan('Пинг','latency')}
+        <span>Действия</span>
+      </div>
       <div class="dg">`;
     devs.forEach(d=>{
       const s=sc(d);
@@ -1397,7 +1591,7 @@ function render(){
         <div><span class="type-badge ${TC[d.type]||'tk'}">${TL[d.type]||d.type}</span></div>
         ${pingCell(d)}
         <div class="dev-act">
-          <button class="btn-ping" id="ping_${d.id}" onclick="singlePing(${d.id},'${d.ip}')">⚡</button>
+          <button class="btn-ping" id="ping_${d.id}" onclick="singlePing(${d.id},'${d.ip}')">⚡ Пинг</button>
           <button class="btn-reboot" id="reboot_${d.id}" onclick="rebootDevice(${d.id})" ${d.has_creds?'':' title="Нет учётных данных" style="opacity:.4"'}>⟳ Reboot</button>
           <button class="btn btn-ghost" onclick="openEditModal(${d.id})">✏</button>
           <button class="btn btn-del" onclick="delDevice(${d.id})">✕</button>
@@ -1416,6 +1610,9 @@ function render(){
   document.getElementById('sOffline').textContent=allDevices.filter(d=>d.online===false).length;
   document.getElementById('sUnknown').textContent=allDevices.filter(d=>d.online==null).length;
   document.getElementById('sAvgPing').textContent=avgPing?avgPing+' мс':'—';
+
+  // Update power banner based on gateway status
+  updatePowerBanner(allDevices);
 }
 
 async function fetchDevices(){
@@ -1750,13 +1947,114 @@ async function delDevice(id){
   await fetch('/api/devices/'+id,{method:'DELETE'}); fetchDevices();
 }
 
+// ── Auto-scan dashboard ───────────────────────────────────────────────────────
+function fmtAgo(ts){
+  if(!ts) return 'никогда';
+  const s=Math.round((Date.now()/1000)-ts);
+  if(s<60) return s+'с назад';
+  if(s<3600) return Math.floor(s/60)+'м назад';
+  return Math.floor(s/3600)+'ч назад';
+}
+function fmtCountdown(total, elapsed){
+  const left=Math.max(0,total-elapsed);
+  if(left<60) return 'через '+left+'с';
+  return 'через '+Math.floor(left/60)+'м '+left%60+'с';
+}
+
+async function fetchAutoScan(){
+  try{
+    const r=await fetch('/api/auto_scan/status');
+    const d=await r.json();
+    renderAutoScan(d);
+  }catch(e){}
+}
+
+function renderAutoScan(d){
+  const disc=d.discovery, sn=d.subnet;
+  const panel=document.getElementById('autoscanPanel');
+
+  // Timers
+  const discPulse=document.getElementById('discPulse');
+  const discLbl=document.getElementById('discTimerLbl');
+  if(disc.running){
+    discPulse.classList.remove('idle');
+    discLbl.textContent='Хосты: сканирование...';
+  } else if(disc.last_run){
+    discPulse.classList.add('idle');
+    const el=Math.round(Date.now()/1000-disc.last_run);
+    discLbl.textContent='Хосты: '+fmtAgo(disc.last_run)+' · след. '+fmtCountdown(300,el);
+  } else {
+    discPulse.classList.add('idle');
+    discLbl.textContent='Хосты: ожидание запуска...';
+  }
+
+  const snPulse=document.getElementById('snPulse');
+  const snLbl=document.getElementById('snTimerLbl');
+  if(sn.running){
+    snPulse.classList.remove('idle');
+    snLbl.textContent='Подсети: сканирование...';
+  } else if(sn.last_run){
+    snPulse.classList.add('idle');
+    const el=Math.round(Date.now()/1000-sn.last_run);
+    snLbl.textContent='Подсети: '+fmtAgo(sn.last_run)+' · след. '+fmtCountdown(900,el);
+  } else {
+    snPulse.classList.add('idle');
+    snLbl.textContent='Подсети: ожидание запуска...';
+  }
+
+  panel.classList.toggle('has-new',(disc.new_count>0)||(sn.new_count>0));
+
+  // Unregistered hosts
+  const discEl=document.getElementById('autoDiscList');
+  if(disc.running){
+    discEl.innerHTML='<div class="autoscan-empty">⟳ Сканирование...</div>';
+  } else if(!disc.last_run){
+    discEl.innerHTML='<div class="autoscan-empty">Ожидание первого скана (~90с после старта)</div>';
+  } else if(disc.new_count===0){
+    discEl.innerHTML='<div class="autoscan-empty" style="color:var(--green)">✅ Все хосты зарегистрированы</div>';
+  } else {
+    discEl.innerHTML=disc.new_devices.map(ip=>`
+      <div class="autoscan-ip">
+        <div class="dot" style="background:var(--yel);box-shadow:0 0 6px var(--yel);width:8px;height:8px;border-radius:50%;flex-shrink:0"></div>
+        <span class="ip-txt">${ip}</span>
+        <span class="sn-txt">${ip.split('.').slice(0,3).join('.')}.0/24</span>
+        <button class="btn btn-yel" style="padding:2px 8px;font-size:10px" onclick="openAddModal('${ip}')">+ Добавить</button>
+      </div>`).join('');
+  }
+
+  // New subnets
+  const snEl=document.getElementById('autoSnList');
+  if(sn.running){
+    snEl.innerHTML='<div class="autoscan-empty">⟳ Сканирование...</div>';
+  } else if(!sn.last_run){
+    snEl.innerHTML='<div class="autoscan-empty">Ожидание первого скана (~3м после старта)</div>';
+  } else if(sn.new_count===0){
+    snEl.innerHTML='<div class="autoscan-empty" style="color:var(--green)">✅ Новых подсетей не найдено</div>';
+  } else {
+    snEl.innerHTML=sn.new_subnets.map(x=>`
+      <div class="autoscan-ip">
+        <div style="background:var(--pur);box-shadow:0 0 6px var(--pur);width:8px;height:8px;border-radius:50%;flex-shrink:0"></div>
+        <span class="ip-txt">192.168.${x}.0/24</span>
+        <span class="sn-txt">шлюз .${x}.1</span>
+        <button class="btn btn-yel" style="padding:2px 8px;font-size:10px" onclick="addAutoSubnet(${x})">+ Реестр</button>
+      </div>`).join('');
+  }
+}
+
+async function addAutoSubnet(x){
+  await fetch('/api/subnets',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({prefix:'192.168.'+x,scan:true})});
+  await fetchSubnets(); renderSubnetUI(); fetchAutoScan();
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 (async()=>{
   await Promise.all([fetchDevices(),fetchSubnets()]);
   renderSubnetUI();
   startAutoCountdown();
-  // Refresh devices every 15s (to pick up auto-ping results from server)
+  fetchAutoScan();
   setInterval(fetchDevices,15000);
+  setInterval(fetchAutoScan,10000);
 })();
 </script>
 </body>
@@ -1768,4 +2066,8 @@ if __name__ == "__main__":
     threading.Thread(target=lambda: _do_monitor_scan(deep=False), daemon=True).start()
     # Auto-ping background loop every 60s
     threading.Thread(target=background_auto_ping, daemon=True).start()
+    # Auto host discovery every 5 min
+    threading.Thread(target=background_auto_discovery, daemon=True).start()
+    # Auto subnet scan every 15 min
+    threading.Thread(target=background_auto_subnet, daemon=True).start()
     app.run(host="0.0.0.0", port=8000, debug=False, threaded=True)
