@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# virtual env
+venv/
+.venv/
+env/
+
+# macOS
+.DS_Store
+
+# logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# database
+*.db
+
+# netwatch data
+devices.json
+subnets.json
+app_main.py
+app_mem_dev_info.py
+app_new.py
+app_not_async.py
+app_old.py
+app_ping_type.py
+app_reload.py
