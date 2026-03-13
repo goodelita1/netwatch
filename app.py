@@ -12,12 +12,69 @@ Features:
 
 from flask import Flask, jsonify, request, render_template_string
 import subprocess, threading, json, os, time, platform, asyncio
-import re, socket
+import re, socket, collections, urllib.request as _ureq
 from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 DEVICES_FILE  = "devices.json"
 SUBNETS_FILE  = "subnets.json"
+EVENTS_FILE   = "events.json"
+TG_FILE       = "telegram.json"
+POWER_IP      = "192.168.88.1"   # gateway — if offline → power outage
+
+# ── Telegram config ────────────────────────────────────────────────────────────
+def load_tg():
+    if os.path.exists(TG_FILE):
+        with open(TG_FILE) as f: return json.load(f)
+    return {"token":"","chat_id":"","enabled":False,
+            "notify_power":True,"notify_device":True,
+            "notify_new_host":True,"down_min":5}
+
+def save_tg(cfg):
+    with open(TG_FILE,"w") as f: json.dump(cfg,f,ensure_ascii=False,indent=2)
+
+def tg_send(text:str):
+    cfg=load_tg()
+    if not cfg.get("enabled") or not cfg.get("token") or not cfg.get("chat_id"): return
+    try:
+        url=f"https://api.telegram.org/bot{cfg['token']}/sendMessage"
+        data=json.dumps({"chat_id":cfg["chat_id"],"text":text,"parse_mode":"HTML"}).encode()
+        _ureq.urlopen(_ureq.Request(url,data=data,headers={"Content-Type":"application/json"}),timeout=8)
+    except Exception as e: print(f"[tg] {e}")
+
+# ── Event log ──────────────────────────────────────────────────────────────────
+_ev_lock = threading.Lock()
+
+def load_events():
+    if os.path.exists(EVENTS_FILE):
+        with open(EVENTS_FILE) as f: return json.load(f)
+    return []
+
+def save_events(evs):
+    with open(EVENTS_FILE,"w") as f: json.dump(evs[-1000:],f,ensure_ascii=False,indent=2)
+
+def add_event(kind:str, ip:str, name:str, detail:str="", notify:bool=False):
+    ev={"ts":time.time(),"kind":kind,"ip":ip,"name":name,"detail":detail}
+    with _ev_lock:
+        evs=load_events(); evs.append(ev); save_events(evs)
+    if notify:
+        icons={"down":"🔴","up":"🟢","power_off":"⚡🔴","power_on":"⚡🟢","reboot":"🔄","new_host":"🆕","down_alert":"⚠️"}
+        icon=icons.get(kind,"ℹ️")
+        threading.Thread(target=tg_send,args=(f"{icon} <b>NetWatch</b>\n<b>{name}</b> ({ip})\n{detail}",),daemon=True).start()
+
+# ── Ping history (sparkline, ~2.4h at 60s interval) ───────────────────────────
+PHIST_MAX = 144   # 144 × 60s = 144 min
+ping_history: dict = {}   # ip → deque[{ts,ms,alive}]
+_ph_lock = threading.Lock()
+
+def record_ping(ip:str, alive:bool, ms):
+    with _ph_lock:
+        if ip not in ping_history:
+            ping_history[ip]=collections.deque(maxlen=PHIST_MAX)
+        ping_history[ip].append({"ts":time.time(),"ms":ms,"alive":alive})
+
+# tracks when each device went down (for delayed alert)
+_down_since: dict = {}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # OUI Database — top vendors seen in networks (prefix → vendor)
@@ -575,6 +632,46 @@ ports_cache   = {}   # ip → [22, 80, ...]
 last_scan_time = 0
 auto_ping_running = False
 
+def _on_ping_result(ip:str, alive:bool, ms, devices_by_ip:dict, cfg:dict=None):
+    """Update caches, record history, fire events on state changes."""
+    prev = status_cache.get(ip)           # None = unknown (first scan)
+    status_cache[ip]  = alive
+    latency_cache[ip] = ms
+    record_ping(ip, alive, ms)
+
+    if cfg is None: cfg = load_tg()
+    name = devices_by_ip.get(ip, {}).get("name", ip)
+    is_gw = (ip == POWER_IP)
+
+    if prev is True and not alive:
+        # ── just went down ────────────────────────────────────────────────
+        _down_since[ip] = time.time()
+        add_event("down", ip, name, "Устройство перестало отвечать на пинг")
+        if is_gw:
+            add_event("power_off", ip, name,
+                      "Главный шлюз недоступен — возможно отключение электроэнергии",
+                      notify=cfg.get("notify_power", True))
+        elif cfg.get("notify_device"):
+            thr = cfg.get("down_min", 5) * 60
+            def _alert(ip=ip, name=name, thr=thr):
+                time.sleep(thr)
+                if status_cache.get(ip) is False:
+                    add_event("down_alert", ip, name,
+                              f"Устройство недоступно более {thr//60} мин", notify=True)
+            threading.Thread(target=_alert, daemon=True).start()
+
+    elif prev is False and alive:
+        # ── came back up ──────────────────────────────────────────────────
+        down_sec = time.time() - _down_since.pop(ip, time.time())
+        mins = int(down_sec // 60)
+        detail = f"Снова онлайн (было недоступно {mins} мин)" if mins else "Снова онлайн"
+        add_event("up", ip, name, detail)
+        if is_gw:
+            add_event("power_on", ip, name,
+                      f"Питание восстановлено (отключение {mins} мин)",
+                      notify=cfg.get("notify_power", True))
+
+
 def _do_monitor_scan(deep=False):
     """Scan all known devices. deep=True → also probe ports for fingerprinting."""
     global last_scan_time
@@ -582,29 +679,44 @@ def _do_monitor_scan(deep=False):
     ips = [d["ip"] for d in devices]
     if not ips: return
 
+    dbip = {d["ip"]: d for d in devices}
+    cfg = load_tg()   # load once for all devices
+
     if deep:
         results = run_async_scan(ips, max_concurrent=60)
+        # Persist mac/vendor/model into devices.json (only fill empty fields)
+        changed = False
         for r in results:
             ip = r["ip"]
-            status_cache[ip]  = r["alive"]
-            latency_cache[ip] = r["latency"]
-            if r["mac"]:   mac_cache[ip]    = r["mac"]
-            if r["vendor"]: vendor_cache[ip] = r["vendor"]
-            if r["model"]:  model_cache[ip]  = r["model"]
-            if r["open_ports"]: ports_cache[ip] = r["open_ports"]
+            if r["mac"]:        mac_cache[ip]    = r["mac"]
+            if r["vendor"]:     vendor_cache[ip] = r["vendor"]
+            if r["model"]:      model_cache[ip]  = r["model"]
+            if r["open_ports"]: ports_cache[ip]  = r["open_ports"]
+            _on_ping_result(ip, r["alive"], r["latency"], dbip, cfg)
+        devs = load_devices()
+        rm = {r["ip"]: r for r in results}
+        for d in devs:
+            r = rm.get(d["ip"])
+            if not r: continue
+            for fld in ("mac","vendor","model"):
+                if r.get(fld) and not d.get(fld):
+                    d[fld] = r[fld]; changed = True
+        if changed: save_devices(devs)
     else:
         # Quick ping only (auto every 60s)
+        buf = []; lock = threading.Lock()
         async def quick():
             sem = asyncio.Semaphore(50)
             async def p(ip):
                 async with sem:
                     alive, ms = await async_ping(ip)
-                    status_cache[ip]  = alive
-                    latency_cache[ip] = ms
+                    with lock: buf.append((ip, alive, ms))
             await asyncio.gather(*[p(ip) for ip in ips])
         loop = asyncio.new_event_loop()
         try: loop.run_until_complete(quick())
         finally: loop.close()
+        for ip, alive, ms in buf:
+            _on_ping_result(ip, alive, ms, dbip, cfg)
 
     last_scan_time = time.time()
 
@@ -650,6 +762,11 @@ def _run_auto_discovery():
         })
         if found_new:
             print(f"[auto-discovery] {len(found_new)} unregistered hosts: {found_new}")
+            cfg = load_tg()
+            if cfg.get("notify_new_host"):
+                for ip in found_new:
+                    add_event("new_host", ip, ip,
+                              f"Незарегистрированный хост в сети", notify=True)
     except Exception as e:
         print(f"[auto-discovery] error: {e}")
     finally:
@@ -796,7 +913,50 @@ def reboot_device_route(did):
     if not device:
         return jsonify({"ok": False, "detail": "Устройство не найдено"}), 404
     result = reboot_device(device)
+    if result.get("ok"):
+        add_event("reboot", device["ip"], device.get("name", device["ip"]),
+                  f"Перезагрузка: {result.get('method','')}")
     return jsonify(result)
+
+@app.route("/api/events")
+def get_events():
+    limit = int(request.args.get("limit", 200))
+    evs = load_events()
+    return jsonify(list(reversed(evs[-limit:])))
+
+@app.route("/api/events", methods=["DELETE"])
+def clear_events():
+    save_events([])
+    return jsonify({"status": "cleared"})
+
+@app.route("/api/ping_history/<ip>")
+def get_ping_history(ip):
+    with _ph_lock:
+        h = list(ping_history.get(ip, []))
+    return jsonify(h)
+
+@app.route("/api/telegram", methods=["GET"])
+def get_tg():
+    cfg = load_tg()
+    safe = dict(cfg); safe.pop("token", None)   # never expose token in GET
+    return jsonify(safe)
+
+@app.route("/api/telegram", methods=["POST"])
+def set_tg():
+    data = request.json or {}
+    cfg = load_tg()
+    for k in ("token","chat_id","enabled","notify_power","notify_device",
+              "notify_new_host","down_min"):
+        if k in data: cfg[k] = data[k]
+    save_tg(cfg)
+    return jsonify({"status": "saved"})
+
+@app.route("/api/telegram/test", methods=["POST"])
+def test_tg():
+    threading.Thread(target=tg_send,
+        args=("✅ <b>NetWatch</b>\nТестовое уведомление — Telegram настроен правильно!",),
+        daemon=True).start()
+    return jsonify({"status": "sent"})
 
 @app.route("/api/devices", methods=["POST"])
 def add_device():
@@ -1028,7 +1188,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .tm{background:#00e67618;color:#00e676;border:1px solid #00e67640;}
 .ts{background:#ffb30018;color:#ffb300;border:1px solid #ffb30040;}
 
-/* Ping cell */
+/* Ping cell + sparkline */
 .ping-cell{display:flex;flex-direction:column;align-items:flex-start;gap:3px;}
 .latency-bar-wrap{width:100%;height:4px;background:var(--bd);border-radius:2px;overflow:hidden;}
 .latency-bar{height:100%;border-radius:2px;transition:width .4s;}
@@ -1037,6 +1197,40 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .latency-bar.lat-good-b{background:var(--green);}
 .latency-bar.lat-ok-b{background:var(--yel);}
 .latency-bar.lat-bad-b{background:var(--red);}
+.spark-wrap{width:100%;overflow:hidden;}
+.sparkline{display:block;width:100%;height:22px;}
+
+/* Events tab */
+.ev-list{display:flex;flex-direction:column;gap:4px;}
+.ev-row{display:flex;align-items:flex-start;gap:10px;padding:9px 13px;background:var(--sf);border:1px solid var(--bd);border-radius:8px;font-size:12px;}
+.ev-row.down{border-left:3px solid var(--red);}
+.ev-row.up{border-left:3px solid var(--green);}
+.ev-row.power_off{border-left:3px solid #ff3d57;background:linear-gradient(90deg,#ff3d5710,var(--sf));}
+.ev-row.power_on{border-left:3px solid var(--green);background:linear-gradient(90deg,#00e67610,var(--sf));}
+.ev-row.reboot{border-left:3px solid var(--cyan);}
+.ev-row.new_host{border-left:3px solid var(--yel);}
+.ev-row.down_alert{border-left:3px solid var(--pur);}
+.ev-icon{font-size:16px;flex-shrink:0;width:22px;text-align:center;}
+.ev-body{flex:1;min-width:0;}
+.ev-name{font-weight:700;font-size:12px;}
+.ev-detail{font-size:11px;color:var(--muted);margin-top:1px;}
+.ev-ts{font-size:10px;color:var(--muted);white-space:nowrap;flex-shrink:0;}
+.ev-ip{font-size:10px;color:var(--acc);font-family:'JetBrains Mono',monospace;}
+.ev-filter-bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;align-items:center;}
+.ev-empty{text-align:center;padding:50px;color:var(--muted);}
+
+/* Telegram settings */
+.tg-form{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+@media(max-width:640px){.tg-form{grid-template-columns:1fr;}}
+.tg-row{display:flex;flex-direction:column;gap:5px;}
+.tg-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;}
+.tg-inp{background:var(--bg);border:1px solid var(--bd);color:var(--text);padding:9px 12px;border-radius:8px;font-family:inherit;font-size:12px;outline:none;transition:border-color .18s;width:100%;}
+.tg-inp:focus{border-color:var(--acc);}
+.tg-toggle{display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;}
+.tg-toggle input{accent-color:var(--acc);width:15px;height:15px;}
+.tg-status{font-size:11px;padding:6px 12px;border-radius:6px;display:inline-block;margin-top:4px;}
+.tg-ok{background:var(--gd);color:var(--green);border:1px solid #00e67630;}
+.tg-err{background:#ff3d5718;color:var(--red);border:1px solid #ff3d5730;}
 
 .dev-act{display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap;}
 .dg{display:flex;flex-direction:column;gap:4px;}
@@ -1177,8 +1371,10 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 
 <div class="tabs">
   <div class="tab active" onclick="switchTab('monitor',this)">📡 Мониторинг</div>
+  <div class="tab" onclick="switchTab('events',this)">📋 События</div>
   <div class="tab" onclick="switchTab('discovery',this)">🔍 Сканер хостов</div>
   <div class="tab" onclick="switchTab('subnets',this)">🗂 Подсети</div>
+  <div class="tab" onclick="switchTab('settings',this)">⚙️ Настройки</div>
 </div>
 
 <!-- ════ TAB: MONITOR ════ -->
@@ -1248,6 +1444,83 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
     </div>
   </div>
   <div id="devList"></div>
+</div>
+
+<!-- ════ TAB: EVENTS ════ -->
+<div class="tp" id="tab-events">
+  <div class="panel">
+    <div class="panel-hdr">
+      <h3>📋 Журнал событий</h3>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="panel-sub" id="evCount">—</span>
+        <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="fetchEvents()">↻ Обновить</button>
+        <button class="btn btn-del" style="font-size:11px;padding:4px 10px" onclick="clearEvents()">🗑 Очистить</button>
+      </div>
+    </div>
+    <div class="ev-filter-bar">
+      <span style="font-size:10px;color:var(--muted)">Фильтр:</span>
+      <button class="fbtn active" onclick="setEvFilter('all',this)">Все</button>
+      <button class="fbtn" onclick="setEvFilter('power_off',this)">⚡ Свет</button>
+      <button class="fbtn" onclick="setEvFilter('down',this)">🔴 Упали</button>
+      <button class="fbtn" onclick="setEvFilter('up',this)">🟢 Встали</button>
+      <button class="fbtn" onclick="setEvFilter('reboot',this)">🔄 Ребут</button>
+      <button class="fbtn" onclick="setEvFilter('new_host',this)">🆕 Новые</button>
+    </div>
+    <div id="evList"><div class="ev-empty">Загрузка...</div></div>
+  </div>
+</div>
+
+<!-- ════ TAB: SETTINGS ════ -->
+<div class="tp" id="tab-settings">
+  <div class="panel">
+    <div class="panel-hdr"><h3>🤖 Telegram уведомления</h3></div>
+    <div class="tg-form" id="tgForm">
+      <div class="tg-row" style="grid-column:1/-1">
+        <label class="tg-label">Bot Token</label>
+        <input class="tg-inp" id="tgToken" type="password" placeholder="1234567890:AABBccDDee..." autocomplete="off">
+      </div>
+      <div class="tg-row">
+        <label class="tg-label">Chat ID</label>
+        <input class="tg-inp" id="tgChatId" placeholder="-1001234567890">
+      </div>
+      <div class="tg-row">
+        <label class="tg-label">Порог оповещения об устройстве</label>
+        <input class="tg-inp" id="tgDownMin" type="number" min="1" max="60" value="5" style="width:80px">
+        <span style="font-size:11px;color:var(--muted)">минут до отправки</span>
+      </div>
+      <div class="tg-row" style="grid-column:1/-1;display:flex;flex-direction:column;gap:8px">
+        <label class="tg-label">Уведомлять о:</label>
+        <label class="tg-toggle"><input type="checkbox" id="tgPower" checked> ⚡ Отключение / восстановление света</label>
+        <label class="tg-toggle"><input type="checkbox" id="tgDevice" checked> 🔴 Устройство долго недоступно</label>
+        <label class="tg-toggle"><input type="checkbox" id="tgHost" checked> 🆕 Новый незарегистрированный хост</label>
+      </div>
+      <div class="tg-row" style="grid-column:1/-1">
+        <label class="tg-toggle"><input type="checkbox" id="tgEnabled"> <b>Включить уведомления</b></label>
+      </div>
+    </div>
+    <div style="display:flex;gap:9px;margin-top:18px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-acc" onclick="saveTg()">💾 Сохранить</button>
+      <button class="btn btn-cyan" onclick="testTg()">📨 Тест</button>
+      <span id="tgStatus"></span>
+    </div>
+    <div class="divider"></div>
+    <div class="hint" style="line-height:1.9">
+      <b>Как настроить бот:</b><br>
+      1. Напишите <code>@BotFather</code> → <code>/newbot</code> → получите токен<br>
+      2. Добавьте бота в чат или канал, дайте права администратора<br>
+      3. Узнайте Chat ID: напишите в чат и откройте <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code><br>
+      4. Вставьте токен и Chat ID выше, нажмите «Тест»
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-hdr"><h3>⚡ Индикатор питания</h3></div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <label class="tg-label" style="white-space:nowrap">IP шлюза (main gateway):</label>
+      <input class="tg-inp" id="powerIpInp" style="max-width:180px" placeholder="192.168.88.1">
+      <button class="btn btn-acc" onclick="savePowerIp()">Сохранить</button>
+    </div>
+    <p class="hint" style="margin-top:10px">Если этот IP не пингуется — баннер покажет «НЕТ СВЕТА».</p>
+  </div>
 </div>
 
 <!-- ════ TAB: DISCOVERY ════ -->
@@ -1408,6 +1681,8 @@ function switchTab(name,el){
   el.classList.add('active');
   document.getElementById('tab-'+name).classList.add('active');
   if(name==='subnets'||name==='discovery') renderSubnetUI();
+  if(name==='events') fetchEvents();
+  if(name==='settings') loadTg();
 }
 
 // ── Auto-ping countdown ───────────────────────────────────────────────────────
@@ -1516,14 +1791,87 @@ function thSpan(label, key){
 function pfx(ip){return ip.split('.').slice(0,3).join('.');}
 function sc(d){return d.online===true?'on':d.online===false?'off':'unk';}
 
+// ── Sparkline helpers ─────────────────────────────────────────────────────────
+const sparkCache = {};   // ip → svg string
+
+function buildSparkline(pts){
+  // pts: [{ts,ms,alive}] — latest at end
+  const W=120, H=22, pad=2;
+  if(!pts||pts.length<2) return '';
+  const vals=pts.map(p=>p.ms!=null?p.ms:null);
+  const alive=pts.map(p=>p.alive);
+  const valid=vals.filter(v=>v!=null);
+  if(!valid.length) return '';
+  const vmin=Math.min(...valid), vmax=Math.max(...valid,vmin+1);
+  const n=vals.length;
+  // build polyline points
+  let segs=[], cur=[];
+  for(let i=0;i<n;i++){
+    const x=pad+(i/(n-1||1))*(W-2*pad);
+    if(vals[i]==null||!alive[i]){
+      if(cur.length>1) segs.push({pts:cur.slice(),down:false});
+      cur=[];
+    } else {
+      const y=H-pad-((vals[i]-vmin)/(vmax-vmin||1))*(H-2*pad);
+      cur.push([x,y]);
+    }
+    if(!alive[i]&&i>0&&alive[i-1]){
+      // mark down gap
+      segs.push({pts:[[x,H-pad],[x,pad]],down:true});
+    }
+  }
+  if(cur.length>1) segs.push({pts:cur,down:false});
+  let svg=`<svg class="sparkline" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">`;
+  // draw offline drop lines
+  segs.filter(s=>s.down).forEach(s=>{
+    svg+=`<line x1="${s.pts[0][0]}" y1="${s.pts[0][1]}" x2="${s.pts[1][0]}" y2="${s.pts[1][1]}" stroke="var(--red)" stroke-width="1" stroke-dasharray="2,2" opacity=".5"/>`;
+  });
+  // draw lines
+  segs.filter(s=>!s.down).forEach(s=>{
+    const d=s.pts.map((p,i)=>(i===0?'M':'L')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+    svg+=`<path d="${d}" fill="none" stroke="var(--green)" stroke-width="1.5" stroke-linejoin="round" opacity=".8"/>`;
+    // last dot
+    const lp=s.pts[s.pts.length-1];
+    svg+=`<circle cx="${lp[0].toFixed(1)}" cy="${lp[1].toFixed(1)}" r="2" fill="var(--green)"/>`;
+  });
+  svg+='</svg>';
+  return svg;
+}
+
+// ip→history, fetched lazily
+const pingHist={};
+const pingHistPending=new Set();
+
+async function ensureHistory(ip){
+  if(pingHist[ip]||pingHistPending.has(ip)) return;
+  pingHistPending.add(ip);
+  try{
+    const r=await fetch('/api/ping_history/'+ip);
+    pingHist[ip]=await r.json();
+  }catch(e){}
+}
+
 function pingCell(d){
   const ms=d.latency;
-  if(d.online===false) return `<div class="ping-cell"><span style="font-size:10px;color:var(--red)">недост.</span></div>`;
+  const hist=pingHist[d.ip]||[];
+  if(!pingHist[d.ip]) ensureHistory(d.ip);  // lazy load, re-renders on next cycle
+
+  if(d.online===false){
+    const spark=buildSparkline(hist);
+    return `<div class="ping-cell">
+      <span style="font-size:10px;color:var(--red)">недост.</span>
+      ${spark?`<div class="spark-wrap">${spark}</div>`:''}
+    </div>`;
+  }
   if(ms===null||ms===undefined) return `<div class="ping-cell"><span style="font-size:10px;color:var(--muted)">—</span></div>`;
   const lc=latClass(ms); const lb=latBarClass(ms); const bw=latBarWidth(ms);
+  const spark=buildSparkline(hist);
   return `<div class="ping-cell">
-    <span class="latency-val ${lc}">${ms} мс</span>
-    <div class="latency-bar-wrap"><div class="latency-bar ${lb}" style="width:${bw}%"></div></div>
+    <div style="display:flex;align-items:center;gap:5px">
+      <span class="latency-val ${lc}">${ms} мс</span>
+    </div>
+    ${spark?`<div class="spark-wrap">${spark}</div>`
+           :`<div class="latency-bar-wrap"><div class="latency-bar ${lb}" style="width:${bw}%"></div></div>`}
   </div>`;
 }
 
@@ -1621,6 +1969,18 @@ async function fetchDevices(){
   if(data.last_scan){
     const d=new Date(data.last_scan*1000);
     document.getElementById('lastScan').textContent='Скан: '+d.toLocaleTimeString('ru-RU');
+  }
+  render();
+  // refresh sparkline history for all visible devices
+  for(const d of allDevices) ensureHistory(d.ip);
+}
+
+async function refreshAllHistory(){
+  for(const d of allDevices){
+    try{
+      const r=await fetch('/api/ping_history/'+d.ip);
+      pingHist[d.ip]=await r.json();
+    }catch(e){}
   }
   render();
 }
@@ -2047,14 +2407,123 @@ async function addAutoSubnet(x){
   await fetchSubnets(); renderSubnetUI(); fetchAutoScan();
 }
 
+// ── Events tab ────────────────────────────────────────────────────────────────
+let allEvents=[];
+let evFilter='all';
+
+const EV_ICONS={down:'🔴',up:'🟢',power_off:'⚡🔴',power_on:'⚡🟢',reboot:'🔄',new_host:'🆕',down_alert:'⚠️'};
+const EV_LABELS={down:'Недоступен',up:'Онлайн',power_off:'Свет отключён',power_on:'Свет восстановлен',
+                 reboot:'Перезагрузка',new_host:'Новый хост',down_alert:'Долго недоступен'};
+
+async function fetchEvents(){
+  try{
+    const r=await fetch('/api/events?limit=300');
+    allEvents=await r.json();
+    renderEvents();
+  }catch(e){}
+}
+
+function setEvFilter(f,el){
+  evFilter=f;
+  document.querySelectorAll('.ev-filter-bar .fbtn').forEach(b=>b.classList.remove('active'));
+  if(el) el.classList.add('active');
+  renderEvents();
+}
+
+function renderEvents(){
+  const el=document.getElementById('evList');
+  const cntEl=document.getElementById('evCount');
+  let evs=allEvents;
+  if(evFilter!=='all'){
+    if(evFilter==='power_off') evs=evs.filter(e=>e.kind==='power_off'||e.kind==='power_on');
+    else evs=evs.filter(e=>e.kind===evFilter||e.kind===evFilter+'_alert');
+  }
+  cntEl.textContent=evs.length+' событий';
+  if(!evs.length){el.innerHTML='<div class="ev-empty">Нет событий</div>';return;}
+  el.innerHTML=evs.map(e=>{
+    const d=new Date(e.ts*1000);
+    const ts=d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'})+' '+d.toLocaleTimeString('ru-RU');
+    return `<div class="ev-row ${e.kind}">
+      <div class="ev-icon">${EV_ICONS[e.kind]||'ℹ️'}</div>
+      <div class="ev-body">
+        <div style="display:flex;align-items:baseline;gap:7px;flex-wrap:wrap">
+          <span class="ev-name">${e.name}</span>
+          <span class="ev-ip">${e.ip}</span>
+          <span style="font-size:10px;color:var(--muted)">${EV_LABELS[e.kind]||e.kind}</span>
+        </div>
+        ${e.detail?`<div class="ev-detail">${e.detail}</div>`:''}
+      </div>
+      <div class="ev-ts">${ts}</div>
+    </div>`;
+  }).join('');
+}
+
+async function clearEvents(){
+  if(!confirm('Очистить весь журнал событий?'))return;
+  await fetch('/api/events',{method:'DELETE'});
+  allEvents=[]; renderEvents();
+}
+
+// ── Telegram settings ─────────────────────────────────────────────────────────
+async function loadTg(){
+  try{
+    const r=await fetch('/api/telegram');
+    const d=await r.json();
+    document.getElementById('tgChatId').value=d.chat_id||'';
+    document.getElementById('tgDownMin').value=d.down_min||5;
+    document.getElementById('tgPower').checked=d.notify_power!==false;
+    document.getElementById('tgDevice').checked=d.notify_device!==false;
+    document.getElementById('tgHost').checked=d.notify_new_host!==false;
+    document.getElementById('tgEnabled').checked=!!d.enabled;
+    // Load POWER_IP into settings field
+    document.getElementById('powerIpInp').value=POWER_IP;
+  }catch(e){}
+}
+
+async function saveTg(){
+  const token=document.getElementById('tgToken').value.trim();
+  const payload={
+    chat_id:document.getElementById('tgChatId').value.trim(),
+    down_min:parseInt(document.getElementById('tgDownMin').value)||5,
+    notify_power:document.getElementById('tgPower').checked,
+    notify_device:document.getElementById('tgDevice').checked,
+    notify_new_host:document.getElementById('tgHost').checked,
+    enabled:document.getElementById('tgEnabled').checked,
+  };
+  if(token) payload.token=token;
+  const r=await fetch('/api/telegram',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const d=await r.json();
+  const st=document.getElementById('tgStatus');
+  if(d.status==='saved'){st.className='tg-status tg-ok';st.textContent='✅ Сохранено';}
+  else{st.className='tg-status tg-err';st.textContent='❌ Ошибка';}
+  setTimeout(()=>st.textContent='',3000);
+}
+
+async function testTg(){
+  const st=document.getElementById('tgStatus');
+  st.className='tg-status';st.textContent='⏳ Отправка...';
+  await saveTg();
+  await fetch('/api/telegram/test',{method:'POST'});
+  st.className='tg-status tg-ok';st.textContent='📨 Отправлено — проверьте Telegram';
+}
+
+function savePowerIp(){
+  const v=document.getElementById('powerIpInp').value.trim();
+  if(v){ window.POWER_IP=v; alert('IP обновлён до '+v+'\n(Действует до перезагрузки страницы)'); }
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 (async()=>{
   await Promise.all([fetchDevices(),fetchSubnets()]);
   renderSubnetUI();
   startAutoCountdown();
   fetchAutoScan();
+  fetchEvents();
+  loadTg();
   setInterval(fetchDevices,15000);
   setInterval(fetchAutoScan,10000);
+  setInterval(refreshAllHistory,60000);  // refresh sparklines every 60s
+  setInterval(fetchEvents,30000);        // refresh events every 30s
 })();
 </script>
 </body>

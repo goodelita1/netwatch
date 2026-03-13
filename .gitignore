@@ -25,6 +25,8 @@ env/
 # netwatch data
 devices.json
 subnets.json
+events.json
+telegram.json
 app_main.py
 app_mem_dev_info.py
 app_new.py
@@ -38,3 +40,5 @@ app_paramiko.py
 app_mik_reload.py
 app_autoscan.py
 app_light_version.py
+app_all_in_one.py
+app_graph_tgbot.py
