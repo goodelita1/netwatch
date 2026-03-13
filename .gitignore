@@ -32,3 +32,6 @@ app_not_async.py
 app_old.py
 app_ping_type.py
 app_reload.py
+app_master.py
+app_sshpass.py
+app_paramiko.py

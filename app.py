@@ -399,21 +399,24 @@ def _http(url, method="GET", data=None, headers=None, login="", password="",
 
 
 def _reboot_mikrotik(ip, login, password) -> dict:
-    """MikroTik RouterOS REST API reboot (v7+) with HTTP fallback (v6)."""
-    # Try REST API (RouterOS 7.x)
-    for scheme in ("https", "http"):
+    """MikroTik RouterOS reboot — REST API → Binary API → SSH (paramiko)."""
+
+    # 1. REST API (RouterOS 7.x)
+    for scheme in ("http", "https"):
         url = f"{scheme}://{ip}/rest/system/reboot"
-        st, body = _http(url, method="POST", data="{}", login=login, password=password)
+        st, _ = _http(url, method="POST", data="{}", login=login, password=password)
         if st in (200, 201, 204):
             return {"ok": True, "method": f"MikroTik REST ({scheme})", "detail": "Команда отправлена"}
-    # Fallback: MikroTik API port 8728 (binary protocol)
+
+    # 2. Binary API port 8728 (RouterOS 6.x)
     try:
-        result = _mikrotik_api_reboot(ip, login, password)
-        if result: return {"ok": True, "method": "MikroTik API (8728)", "detail": "Команда отправлена"}
+        if _mikrotik_api_reboot(ip, login, password):
+            return {"ok": True, "method": "MikroTik API (8728)", "detail": "Команда отправлена"}
     except Exception:
         pass
-    return {"ok": False, "method": "MikroTik", "detail": "Не удалось подключиться. Проверьте логин/пароль и включите REST API."}
 
+    # 3. SSH via paramiko
+    return _reboot_via_ssh(ip, login, password, command="/system reboot")
 
 def _mikrotik_api_encode(word: str) -> bytes:
     """Encode one word for MikroTik binary API."""
@@ -505,27 +508,83 @@ def _reboot_generic_http(ip, login, password) -> dict:
     return {"ok": False, "method": "Generic HTTP", "detail": "Нет ответа от известных reboot-эндпоинтов"}
 
 
-def _reboot_via_ssh(ip, login, password) -> dict:
-    """SSH reboot via subprocess (requires ssh binary + sshpass or key auth)."""
-    # Try with sshpass if available
-    for ssh_cmd in (["sshpass", "-p", password, "ssh"], None):
-        if ssh_cmd is None:
-            cmd = ["ssh", "-o", "StrictHostKeyChecking=no",
-                   "-o", "ConnectTimeout=5", f"{login}@{ip}", "reboot"]
-        else:
-            cmd = ssh_cmd + ["-o", "StrictHostKeyChecking=no",
-                             "-o", "ConnectTimeout=5", f"{login}@{ip}", "reboot"]
+def _reboot_via_ssh(ip, login, password, command="/system reboot") -> dict:
+    """SSH reboot using paramiko — pure Python, no sshpass needed.
+    Install: pip install paramiko
+    """
+    try:
+        import paramiko
+    except ImportError:
+        return {"ok": False, "method": "SSH",
+                "detail": "Установите paramiko: pip install paramiko"}
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(ip, port=22, username=login, password=password,
+                       timeout=10, allow_agent=False, look_for_keys=False)
+
+        # Try exec_command first — cleaner, works on most RouterOS versions
+        stdin, stdout, stderr = client.exec_command(command, timeout=8)
+        stdin.close()
+
+        # Give RouterOS time to process and initiate reboot
+        time.sleep(2)
+
+        out = stdout.read(512).decode(errors="ignore")
+        err = stderr.read(512).decode(errors="ignore")
+        exit_code = stdout.channel.recv_exit_status()
+
+        client.close()
+
+        # RouterOS returns exit 0 on success; connection may drop mid-read
+        if exit_code in (0, -1):
+            return {"ok": True, "method": "SSH (paramiko / exec)",
+                    "detail": f'Команда "{command}" принята — устройство перезагружается'}
+
+        # If exec_command gave non-zero, fall back to interactive shell
+        raise Exception(f"exec exit={exit_code} err={err.strip()}")
+
+    except Exception as exec_err:
+        # Fallback: invoke_shell (some RouterOS versions need interactive mode)
         try:
-            r = subprocess.run(cmd, capture_output=True, timeout=10)
-            if r.returncode in (0, 1):  # 1 = connection closed after reboot = ok
-                return {"ok": True, "method": "SSH", "detail": "Команда reboot отправлена"}
-        except FileNotFoundError:
-            continue
-        except Exception as ex:
-            return {"ok": False, "method": "SSH", "detail": str(ex)}
-    return {"ok": False, "method": "SSH", "detail": "SSH недоступен на этом сервере"}
+            client2 = paramiko.SSHClient()
+            client2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client2.connect(ip, port=22, username=login, password=password,
+                            timeout=10, allow_agent=False, look_for_keys=False)
 
+            shell = client2.invoke_shell(width=200, height=50)
+            time.sleep(1.0)                        # wait for RouterOS prompt
+            shell.recv(4096)                       # drain welcome banner
 
+            shell.send(command + "\n")
+            time.sleep(2.5)                        # wait for RouterOS to process
+
+            # Drain any confirmation prompt and reply y
+            if shell.recv_ready():
+                resp = shell.recv(1024).decode(errors="ignore")
+                if "y/n" in resp.lower() or "confirm" in resp.lower():
+                    shell.send("y\n")
+                    time.sleep(1.5)
+
+            client2.close()
+            return {"ok": True, "method": "SSH (paramiko / shell)",
+                    "detail": f'Команда "{command}" отправлена — устройство перезагружается'}
+
+        except paramiko.AuthenticationException:
+            return {"ok": False, "method": "SSH (paramiko)",
+                    "detail": "Ошибка аутентификации — проверьте логин и пароль"}
+        except Exception as shell_err:
+            msg = str(shell_err).lower()
+            if "reset" in msg or "eof" in msg or "closed" in msg or "broken" in msg:
+                # Connection dropped = device is rebooting = success
+                return {"ok": True, "method": "SSH (paramiko / shell)",
+                        "detail": "Соединение закрыто устройством — устройство перезагружается"}
+            return {"ok": False, "method": "SSH (paramiko)",
+                    "detail": f"Ошибка: {shell_err}"}
+    finally:
+        try: client.close()
+        except: pass
 VENDOR_REBOOT = {
     "mikrotik":  _reboot_mikrotik,
     "hikvision": _reboot_hikvision,
@@ -541,25 +600,19 @@ def reboot_device(device: dict) -> dict:
     password = device.get("cred_password", "")
     vendor   = (device.get("vendor") or "").lower().strip()
 
-    if not login:  login = "admin"
+    if not login: login = "admin"
     if not password:
-        return {"ok": False, "method": "—", "detail": "Пароль не задан. Добавьте учётные данные в настройках устройства."}
+        return {"ok": False, "method": "—",
+                "detail": "Пароль не задан. Добавьте учётные данные в настройках устройства."}
 
-    # Vendor-specific first
-    fn = None
+    # Vendor-specific (MikroTik already tries REST → API → SSH internally)
     for key, func in VENDOR_REBOOT.items():
         if key in vendor:
-            fn = func; break
+            return func(ip, login, password)
 
-    if fn:
-        result = fn(ip, login, password)
-        if result["ok"]: return result
-
-    # Generic HTTP fallback
+    # Unknown vendor: generic HTTP then SSH
     result = _reboot_generic_http(ip, login, password)
     if result["ok"]: return result
-
-    # SSH last resort
     return _reboot_via_ssh(ip, login, password)
 
 
@@ -575,11 +628,6 @@ ports_cache   = {}   # ip → [22, 80, ...]
 last_scan_time = 0
 auto_ping_running = False
 
-deep_scan_state = {
-    "running": False, "progress": 0, "done": 0, "total": 0,
-    "started_at": None, "finished_at": None
-}
-
 def _do_monitor_scan(deep=False):
     """Scan all known devices. deep=True → also probe ports for fingerprinting."""
     global last_scan_time
@@ -588,43 +636,15 @@ def _do_monitor_scan(deep=False):
     if not ips: return
 
     if deep:
-        lock = threading.Lock()
-        deep_scan_state.update({
-            "running": True, "progress": 0, "done": 0, "total": len(ips),
-            "started_at": time.time(), "finished_at": None
-        })
-
-        collected = []
-        def on_result(r):
-            with lock:
-                collected.append(r)
-                deep_scan_state["done"] += 1
-                deep_scan_state["progress"] = int(deep_scan_state["done"] / deep_scan_state["total"] * 100)
-                ip = r["ip"]
-                status_cache[ip]  = r["alive"]
-                latency_cache[ip] = r["latency"]
-                if r["mac"]:        mac_cache[ip]    = r["mac"]
-                if r["vendor"]:     vendor_cache[ip] = r["vendor"]
-                if r["model"]:      model_cache[ip]  = r["model"]
-                if r["open_ports"]: ports_cache[ip]  = r["open_ports"]
-
-        run_async_scan(ips, on_result=on_result, max_concurrent=60)
-
-        # Persist vendor/model/mac into devices.json
-        scan_map = {r["ip"]: r for r in collected}
-        devs = load_devices()
-        changed = False
-        for d in devs:
-            r = scan_map.get(d["ip"])
-            if not r: continue
-            if r.get("mac")    and not d.get("mac"):    d["mac"]    = r["mac"];    changed = True
-            if r.get("vendor") and not d.get("vendor"): d["vendor"] = r["vendor"]; changed = True
-            if r.get("model")  and not d.get("model"):  d["model"]  = r["model"];  changed = True
-        if changed:
-            save_devices(devs)
-
-        deep_scan_state["running"] = False
-        deep_scan_state["finished_at"] = time.time()
+        results = run_async_scan(ips, max_concurrent=60)
+        for r in results:
+            ip = r["ip"]
+            status_cache[ip]  = r["alive"]
+            latency_cache[ip] = r["latency"]
+            if r["mac"]:   mac_cache[ip]    = r["mac"]
+            if r["vendor"]: vendor_cache[ip] = r["vendor"]
+            if r["model"]:  model_cache[ip]  = r["model"]
+            if r["open_ports"]: ports_cache[ip] = r["open_ports"]
     else:
         # Quick ping only (auto every 60s)
         async def quick():
@@ -729,14 +749,8 @@ def trigger_scan():
 @app.route("/api/deep_scan", methods=["POST"])
 def trigger_deep_scan():
     """Full scan: ping + ports + vendor + model."""
-    if deep_scan_state.get("running"):
-        return jsonify({"status": "already_running"}), 400
     deep_scan()
     return jsonify({"status": "deep_scanning"})
-
-@app.route("/api/deep_scan/status")
-def deep_scan_status():
-    return jsonify(deep_scan_state)
 
 @app.route("/api/ping/<ip>")
 def ping_single(ip):
@@ -1096,20 +1110,6 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
   </div>
 </header>
 
-<!-- Deep scan progress bar -->
-<div id="deepScanProg" style="display:none;margin-bottom:14px;">
-  <div style="background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:11px 16px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-      <span style="font-size:11px;color:var(--muted)" id="deepProgLbl">🔬 Глубокий скан...</span>
-      <span style="font-size:11px;font-weight:700;color:var(--cyan)" id="deepProgPct">0%</span>
-    </div>
-    <div style="background:var(--sf2);border-radius:5px;height:6px;overflow:hidden;">
-      <div id="deepProgFill" style="height:100%;border-radius:5px;width:0%;background:linear-gradient(90deg,var(--cyan),var(--acc));transition:width .35s;"></div>
-    </div>
-    <div style="font-size:10px;color:var(--muted);margin-top:5px" id="deepProgDetail"></div>
-  </div>
-</div>
-
 <div class="tabs">
   <div class="tab active" onclick="switchTab('monitor',this)">📡 Мониторинг</div>
   <div class="tab" onclick="switchTab('discovery',this)">🔍 Сканер хостов</div>
@@ -1286,7 +1286,7 @@ const TL={router:'Роутер',ap:'WiFi AP',camera:'Камера',client:'Кл�
 const TC={router:'tr2',ap:'ta',camera:'tc',client:'tk',mobile:'tm',server:'ts'};
 
 let allDevices=[], allSubnets=[], currentFilter='all', scanning=false, deepScanning=false;
-let discPoll=null, snScanPoll=null, deepPollTimer=null;
+let discPoll=null, snScanPoll=null;
 let autoCountdown=60, autoTimer=null;
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -1444,33 +1444,18 @@ async function triggerScan(){
 async function triggerDeepScan(){
   if(deepScanning)return; deepScanning=true;
   const btn=document.getElementById('deepBtn');
-  btn.textContent='🔬 Сканирование...'; btn.classList.add('spin'); btn.disabled=true;
+  btn.textContent='🔬 Сканирование...'; btn.classList.add('spin');
   await fetch('/api/deep_scan',{method:'POST'});
-  document.getElementById('deepScanProg').style.display='block';
-  document.getElementById('deepProgFill').style.width='0%';
-  document.getElementById('deepProgPct').textContent='0%';
-  document.getElementById('deepProgLbl').textContent='🔬 Глубокий скан...';
-  document.getElementById('deepProgDetail').textContent='';
-  if(deepPollTimer)clearInterval(deepPollTimer);
-  deepPollTimer=setInterval(async()=>{
-    const r=await fetch('/api/deep_scan/status');
-    const d=await r.json();
-    const pct=d.progress||0;
-    document.getElementById('deepProgFill').style.width=pct+'%';
-    document.getElementById('deepProgPct').textContent=pct+'%';
-    document.getElementById('deepProgLbl').textContent=d.running
-      ?`🔬 Сканирование... ${d.done}/${d.total} устройств`
-      :`✅ Готово — ${d.total} устройств`;
-    if(d.done>0)document.getElementById('deepProgDetail').textContent=
-      `Обнаружено: ${d.done} из ${d.total}`;
-    if(!d.running && d.finished_at){
-      clearInterval(deepPollTimer); deepPollTimer=null;
-      deepScanning=false;
-      btn.textContent='🔬 Глубокий скан'; btn.classList.remove('spin'); btn.disabled=false;
-      await fetchDevices(); render();
-      setTimeout(()=>{document.getElementById('deepScanProg').style.display='none';},4000);
+  // Deep scan takes time — poll until last_scan updates
+  let prev=0; let tries=0;
+  const p=setInterval(async()=>{
+    const r=await fetch('/api/devices'); const data=await r.json();
+    tries++;
+    if(data.last_scan!==prev||tries>60){
+      allDevices=data.devices; render(); prev=data.last_scan;
     }
-  },1000);
+    if(tries>60){clearInterval(p);deepScanning=false;btn.textContent='🔬 Глубокий скан';btn.classList.remove('spin');}
+  },3000);
 }
 
 async function singlePing(id,ip){

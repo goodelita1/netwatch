@@ -1,1 +1,2 @@
 flask>=2.3.0
+paramiko>=26.0.0
