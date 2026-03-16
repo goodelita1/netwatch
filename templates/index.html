@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>NetWatch</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/main.css">
+
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">⬡</div>
+    <div>
+      <h1>Net<span>Watch</span></h1>
+      <div style="font-size:10px;color:var(--muted)">Мониторинг сетевой инфраструктуры</div>
+    </div>
+  </div>
+  <div class="hdr-r">
+    <span class="last-scan" id="lastScan">Ожидание...</span>
+    <span class="auto-badge" id="autoBadge">⏱ авто-пинг 60с</span>
+    <button class="btn btn-g" id="scanBtn" onclick="triggerScan()">▶ Пинг</button>
+    <button class="btn btn-cyan" id="deepBtn" onclick="triggerDeepScan()">🔬 Глубокий скан</button>
+    <button class="btn btn-acc" onclick="openAddModal()">+ Устройство</button>
+    <button class="btn btn-ghost" style="font-size:11px;padding:6px 10px" onclick="doLogout()" title="Выйти">👤 {{ username }} ↩</button>
+  </div>
+</header>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('monitor',this)">📡 Мониторинг</div>
+  <div class="tab" onclick="switchTab('events',this)">📋 События</div>
+  <div class="tab" onclick="switchTab('discovery',this)">🔍 Сканер хостов</div>
+  <div class="tab" onclick="switchTab('subnets',this)">🗂 Подсети</div>
+  <div class="tab" onclick="switchTab('settings',this)">⚙️ Настройки</div>
+</div>
+
+<!-- ════ TAB: MONITOR ════ -->
+<div class="tp active" id="tab-monitor">
+
+  <!-- Power status banner -->
+  <div class="power-banner power-unk" id="powerBanner">
+    <div class="power-icon" id="powerIcon">⚡</div>
+    <div class="power-text">
+      <div class="power-title" id="powerTitle">Проверка питания...</div>
+      <div class="power-sub" id="powerSub">Ожидание первого пинга 192.168.88.1</div>
+    </div>
+  </div>
+
+  <!-- Auto-scan results panel -->
+  <div class="autoscan-panel" id="autoscanPanel">
+    <div class="autoscan-hdr">
+      <h3>🤖 Авто-сканирование сети
+        <span style="font-size:10px;font-weight:400;color:var(--muted)">(хосты каждые 5 мин · подсети каждые 15 мин)</span>
+      </h3>
+      <div class="autoscan-timers">
+        <div class="autoscan-timer"><div class="pulse idle" id="discPulse"></div><span id="discTimerLbl">Хосты: ожидание...</span></div>
+        <div class="autoscan-timer"><div class="pulse idle" id="snPulse"></div><span id="snTimerLbl">Подсети: ожидание...</span></div>
+      </div>
+    </div>
+    <div class="autoscan-body">
+      <div>
+        <h4>🔴 Незарегистрированные хосты</h4>
+        <div id="autoDiscList"><div class="autoscan-empty">Ожидание первого скана (~90с после старта)</div></div>
+      </div>
+      <div>
+        <h4>🛰 Новые подсети</h4>
+        <div id="autoSnList"><div class="autoscan-empty">Ожидание первого скана (~3м после старта)</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="sc"><div class="sc-label">Всего</div><div class="sc-val t" id="sTotal">—</div></div>
+    <div class="sc"><div class="sc-label">Онлайн</div><div class="sc-val g" id="sOnline">—</div></div>
+    <div class="sc"><div class="sc-label">Оффлайн</div><div class="sc-val r" id="sOffline">—</div></div>
+    <div class="sc"><div class="sc-label">Средний пинг</div><div class="sc-val c" id="sAvgPing">—</div></div>
+    <div class="sc"><div class="sc-label">Неизвестно</div><div class="sc-val t" id="sUnknown">—</div></div>
+  </div>
+  <div class="toolbar">
+    <div class="filters">
+      <button class="fbtn active" onclick="setFilter('all',this)">Все</button>
+      <button class="fbtn" onclick="setFilter('online',this)">Онлайн</button>
+      <button class="fbtn" onclick="setFilter('offline',this)">Оффлайн</button>
+      <button class="fbtn" onclick="setFilter('router',this)">Роутеры</button>
+      <button class="fbtn" onclick="setFilter('camera',this)">Камеры</button>
+      <button class="fbtn" onclick="setFilter('ap',this)">WiFi AP</button>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <div style="position:relative">
+        <input id="searchInput" oninput="setSearch(this.value)"
+          placeholder="🔍 IP, название, вендор..."
+          style="background:var(--sf);border:1px solid var(--bd);color:var(--text);
+                 padding:6px 30px 6px 10px;border-radius:6px;font-family:inherit;
+                 font-size:11px;outline:none;width:200px;transition:border-color .18s"
+          onfocus="this.style.borderColor='var(--acc)'"
+          onblur="this.style.borderColor='var(--bd)'">
+        <span id="searchClear" onclick="clearSearch()"
+          style="display:none;position:absolute;right:8px;top:50%;transform:translateY(-50%);
+                 cursor:pointer;color:var(--muted);font-size:14px">✕</span>
+      </div>
+      <span style="font-size:10px;color:var(--muted)">Сортировка:</span>
+      <select id="sortSelect" onchange="setSortFromSelect()" style="background:var(--sf);border:1px solid var(--bd);color:var(--text);padding:5px 8px;border-radius:6px;font-family:inherit;font-size:11px;cursor:pointer">
+        <option value="ip-asc">IP ↑</option>
+        <option value="ip-desc">IP ↓</option>
+        <option value="name-asc">Название ↑</option>
+        <option value="name-desc">Название ↓</option>
+        <option value="status-asc">Статус (онлайн)</option>
+        <option value="status-desc">Статус (оффлайн)</option>
+        <option value="latency-asc">Пинг ↑</option>
+        <option value="latency-desc">Пинг ↓</option>
+        <option value="type-asc">Тип ↑</option>
+      </select>
+    </div>
+  </div>
+  <div id="devList"></div>
+</div>
+
+<!-- ════ TAB: EVENTS ════ -->
+<div class="tp" id="tab-events">
+  <div class="panel">
+    <div class="panel-hdr">
+      <h3>📋 Журнал событий</h3>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="panel-sub" id="evCount">—</span>
+        <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="fetchEvents()">↻ Обновить</button>
+        <button class="btn btn-del" style="font-size:11px;padding:4px 10px" onclick="clearEvents()">🗑 Очистить</button>
+      </div>
+    </div>
+    <div class="ev-filter-bar">
+      <span style="font-size:10px;color:var(--muted)">Фильтр:</span>
+      <button class="fbtn active" onclick="setEvFilter('all',this)">Все</button>
+      <button class="fbtn" onclick="setEvFilter('power_off',this)">⚡ Свет</button>
+      <button class="fbtn" onclick="setEvFilter('down',this)">🔴 Упали</button>
+      <button class="fbtn" onclick="setEvFilter('up',this)">🟢 Встали</button>
+      <button class="fbtn" onclick="setEvFilter('reboot',this)">🔄 Ребут</button>
+      <button class="fbtn" onclick="setEvFilter('new_host',this)">🆕 Новые</button>
+    </div>
+    <div id="evList"><div class="ev-empty">Загрузка...</div></div>
+  </div>
+</div>
+
+<!-- ════ TAB: SETTINGS ════ -->
+<div class="tp" id="tab-settings">
+
+  <!-- Telegram -->
+  <div class="panel">
+    <div class="panel-hdr"><h3>🤖 Telegram уведомления</h3></div>
+    <div class="tg-form">
+      <div class="tg-row" style="grid-column:1/-1">
+        <label class="tg-label">Bot Token</label>
+        <input class="tg-inp" id="tgToken" type="password" placeholder="1234567890:AABBccDDee..." autocomplete="off">
+      </div>
+      <div class="tg-row">
+        <label class="tg-label">Порог оповещения</label>
+        <div style="display:flex;align-items:center;gap:7px">
+          <input class="tg-inp" id="tgDownMin" type="number" min="1" max="60" value="5" style="width:70px">
+          <span style="font-size:11px;color:var(--muted)">мин</span>
+        </div>
+      </div>
+      <div class="tg-row">
+        <label class="tg-label">Уведомлять о:</label>
+        <div style="display:flex;flex-direction:column;gap:7px;margin-top:4px">
+          <label class="tg-toggle"><input type="checkbox" id="tgPower" checked> ⚡ Свет отключён / восстановлен</label>
+          <label class="tg-toggle"><input type="checkbox" id="tgDevice" checked> 🔴 Устройство недоступно N мин</label>
+          <label class="tg-toggle"><input type="checkbox" id="tgHost"   checked> 🆕 Новый незарег. хост</label>
+        </div>
+      </div>
+      <div class="tg-row" style="grid-column:1/-1">
+        <label class="tg-toggle" style="font-size:13px"><input type="checkbox" id="tgEnabled"> <b>Включить уведомления</b></label>
+      </div>
+    </div>
+    <div style="display:flex;gap:9px;margin-top:14px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-acc" onclick="saveTg()">💾 Сохранить настройки</button>
+      <span id="tgStatus"></span>
+    </div>
+    <div class="divider"></div>
+
+    <!-- Recipients list -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <span style="font-size:12px;font-weight:700">📬 Получатели</span>
+      <span style="font-size:10px;color:var(--muted)">Бот отправляет всем активным</span>
+    </div>
+    <div id="recipientList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px"></div>
+    <!-- Add recipient form -->
+    <div style="display:flex;gap:7px;flex-wrap:wrap;align-items:flex-end">
+      <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:130px">
+        <label class="tg-label">Chat ID</label>
+        <input class="tg-inp" id="newChatId" placeholder="-1001234567890">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:110px">
+        <label class="tg-label">Метка (необяз.)</label>
+        <input class="tg-inp" id="newChatLabel" placeholder="Иван, #alerts...">
+      </div>
+      <button class="btn btn-acc" style="padding:9px 14px;white-space:nowrap" onclick="addRecipient()">+ Добавить</button>
+    </div>
+    <div class="divider"></div>
+    <div class="hint" style="line-height:1.9">
+      <b>Как настроить:</b><br>
+      1. <code>@BotFather</code> → <code>/newbot</code> → токен<br>
+      2. Добавьте бота в чат/канал, дайте права администратора<br>
+      3. Chat ID: <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>
+    </div>
+  </div>
+
+  <!-- Auth settings -->
+  <div class="panel">
+    <div class="panel-hdr"><h3>🔐 Авторизация</h3></div>
+    <div class="tg-form">
+      <div class="tg-row">
+        <label class="tg-label">Новый логин</label>
+        <input class="tg-inp" id="newUsername" placeholder="admin" autocomplete="off">
+      </div>
+      <div class="tg-row">
+        <label class="tg-label">Новый пароль</label>
+        <input class="tg-inp" id="newPassword" type="password" placeholder="••••••••" autocomplete="new-password">
+      </div>
+      <div class="tg-row">
+        <label class="tg-label">Повторите пароль</label>
+        <input class="tg-inp" id="newPassword2" type="password" placeholder="••••••••" autocomplete="new-password">
+      </div>
+    </div>
+    <div style="display:flex;gap:9px;margin-top:14px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-acc" onclick="changeAuth()">💾 Сменить</button>
+      <span id="authStatus"></span>
+    </div>
+  </div>
+
+  <!-- Power IP -->
+  <div class="panel">
+    <div class="panel-hdr"><h3>⚡ Индикатор питания</h3></div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <label class="tg-label" style="white-space:nowrap">IP шлюза:</label>
+      <input class="tg-inp" id="powerIpInp" style="max-width:180px" placeholder="192.168.88.1">
+      <button class="btn btn-acc" onclick="savePowerIp()">Сохранить</button>
+    </div>
+    <p class="hint" style="margin-top:10px">Если этот IP не пингуется — баннер покажет «НЕТ СВЕТА».</p>
+  </div>
+</div>
+
+<!-- ════ TAB: DISCOVERY ════ -->
+<div class="tp" id="tab-discovery">
+  <div class="disc-ctrl">
+    <h3>🔍 Сканер хостов</h3>
+    <p class="disc-hint">Async-сканер пингует все адреса (.1–.254) выбранных подсетей параллельно.</p>
+    <div class="chk-list" id="discChecks"></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <button class="btn btn-g" id="discBtn" onclick="startDiscovery()">🔍 Запустить</button>
+      <button class="btn btn-ghost" style="font-size:11px" onclick="switchTab('subnets',document.querySelectorAll('.tab')[2])">⚙ Подсети</button>
+    </div>
+    <div class="prog" id="discProg">
+      <div class="prog-top"><span class="prog-lbl" id="dProgLbl">...</span><span class="prog-pct acc" id="dProgPct">0%</span></div>
+      <div class="prog-bg"><div class="prog-fill acc" id="dProgFill" style="width:0%"></div></div>
+      <div class="prog-detail" id="dProgDetail"></div>
+    </div>
+  </div>
+  <div class="stats" id="discStats" style="display:none">
+    <div class="sc"><div class="sc-label">Адресов</div><div class="sc-val t" id="dTotal">—</div></div>
+    <div class="sc"><div class="sc-label">Активных</div><div class="sc-val g" id="dAlive">—</div></div>
+    <div class="sc"><div class="sc-label">Незарег.</div><div class="sc-val y" id="dNew">—</div></div>
+    <div class="sc"><div class="sc-label">В базе</div><div class="sc-val g" id="dKnown">—</div></div>
+  </div>
+  <div class="two-col" id="discPanels" style="display:none">
+    <div class="rpanel">
+      <div class="rphdr new"><span style="font-size:16px">⚠️</span>
+        <span class="rp-title" style="color:var(--yel)">Незарегистрированные</span>
+        <span class="rp-cnt cnt-new" id="dNewCnt">0</span></div>
+      <div class="ip-list" id="dNewList"><div class="empty">Запустите сканирование</div></div>
+    </div>
+    <div class="rpanel">
+      <div class="rphdr known"><span style="font-size:16px">✅</span>
+        <span class="rp-title" style="color:var(--green)">Зарегистрированные</span>
+        <span class="rp-cnt cnt-known" id="dKnownCnt">0</span></div>
+      <div class="ip-list" id="dKnownList"><div class="empty">Запустите сканирование</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ════ TAB: SUBNETS ════ -->
+<div class="tp" id="tab-subnets">
+  <div class="panel">
+    <div class="panel-hdr">
+      <div><h3>🗂 Реестр подсетей</h3><div class="panel-sub">Общий источник для мониторинга и сканера</div></div>
+    </div>
+    <div class="sn-list" id="snList"></div>
+    <div class="hint" style="margin-bottom:8px">Добавить вручную (префикс или CIDR):</div>
+    <div class="add-row">
+      <input class="sn-inp" id="snInput" placeholder="192.168.99  или  192.168.99.0/24" onkeydown="if(event.key==='Enter')addSubnet()">
+      <button class="btn btn-acc" onclick="addSubnet()">+ Добавить</button>
+    </div>
+    <div class="hint" style="margin-top:10px">💡 При добавлении устройства с новым IP подсеть создаётся автоматически.</div>
+  </div>
+
+  <hr class="divider">
+
+  <div class="range-scanner">
+    <div class="range-hdr">
+      <h3>🛰 Сканер диапазона <span class="range-badge">192.168.0–255.0/24</span></h3>
+      <button class="btn btn-pur" id="snScanBtn" onclick="startSnScan()">🛰 Сканировать</button>
+    </div>
+    <div class="range-body">
+      <div class="range-desc">Пингует шлюз <strong>.1</strong> всех 256 подсетей диапазона <strong style="color:var(--pur)">192.168.x.0/24</strong>.<br>Показывает какие уже в реестре, а какие обнаружены впервые.</div>
+      <div class="range-visual" style="font-size:11px">
+        <strong>Проверяется:</strong> 192.168.<strong style="color:var(--pur)">0</strong>.1 ···
+        192.168.<strong style="color:var(--pur)">255</strong>.1
+        → итого <strong style="color:var(--pur)">256 адресов</strong>
+      </div>
+      <div class="prog" id="snProg">
+        <div class="prog-top"><span class="prog-lbl" id="snProgLbl">...</span><span class="prog-pct pur" id="snProgPct">0%</span></div>
+        <div class="prog-bg"><div class="prog-fill pur" id="snProgFill" style="width:0%"></div></div>
+        <div class="prog-detail" id="snProgDetail"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stats" id="snScanStats" style="display:none">
+    <div class="sc"><div class="sc-label">Проверено</div><div class="sc-val t" id="snStTotal">256</div></div>
+    <div class="sc"><div class="sc-label">Живых</div><div class="sc-val p" id="snStAlive">—</div></div>
+    <div class="sc"><div class="sc-label">Новых</div><div class="sc-val y" id="snStNew">—</div></div>
+    <div class="sc"><div class="sc-label">В реестре</div><div class="sc-val g" id="snStKnown">—</div></div>
+  </div>
+  <div class="two-col" id="snScanPanels" style="display:none">
+    <div class="rpanel">
+      <div class="rphdr new"><span style="font-size:16px">⚠️</span>
+        <span class="rp-title" style="color:var(--yel)">Не в реестре</span>
+        <span class="rp-cnt cnt-new" id="snNewCnt">0</span></div>
+      <div class="ip-list" id="snNewList"><div class="empty">Результаты появятся здесь</div></div>
+    </div>
+    <div class="rpanel">
+      <div class="rphdr known"><span style="font-size:16px">✅</span>
+        <span class="rp-title" style="color:var(--green)">Уже в реестре</span>
+        <span class="rp-cnt cnt-known" id="snKnownCnt">0</span></div>
+      <div class="ip-list" id="snKnownList"><div class="empty">Результаты появятся здесь</div></div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /wrap -->
+
+<!-- Device modal -->
+<div class="modal-ov" id="devModal">
+  <div class="modal">
+    <h2 id="mTitle">Добавить устройство</h2>
+    <input type="hidden" id="mId">
+    <div class="fg-row">
+      <div class="fg"><label>IP Адрес</label><input id="mIp" placeholder="192.168.88.X"></div>
+      <div class="fg"><label>Тип</label>
+        <select id="mType">
+          <option value="router">Роутер</option><option value="ap">WiFi AP</option>
+          <option value="camera">IP Камера</option><option value="client">Клиент</option>
+          <option value="mobile">Мобильный</option><option value="server">Сервер</option>
+        </select>
+      </div>
+    </div>
+    <div class="fg"><label>Название</label><input id="mName" placeholder="MikroTik #1"></div>
+    <div class="fg"><label>Местоположение</label><input id="mLoc" placeholder="Серверная..."></div>
+    <div class="fg-row">
+      <div class="fg"><label>MAC адрес</label><input id="mMac" placeholder="AA:BB:CC:DD:EE:FF"></div>
+      <div class="fg"><label>Производитель</label><input id="mVendor" placeholder="MikroTik"></div>
+    </div>
+    <div class="fg"><label>Модель</label><input id="mModel" placeholder="MikroTik RouterOS"></div>
+    <div style="margin:14px 0 10px;padding-top:12px;border-top:1px solid var(--bd);display:flex;align-items:center;gap:8px;">
+      <span style="font-size:11px;font-weight:700;color:var(--muted)">🔑 Учётные данные для перезагрузки</span>
+    </div>
+    <div class="fg-row">
+      <div class="fg"><label>Логин</label><input id="mLogin" placeholder="admin" autocomplete="off"></div>
+      <div class="fg"><label>Пароль</label>
+        <div style="position:relative">
+          <input id="mPassword" type="password" placeholder="••••••••" autocomplete="new-password" style="padding-right:36px">
+          <button type="button" onclick="togglePwd()" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--muted);font-size:14px;" id="eyeBtn">👁</button>
+        </div>
+      </div>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:-6px;margin-bottom:10px;">
+      Сохраняется локально в devices.json. Используется для перезагрузки через HTTP API / SSH.
+    </div>
+    <div class="modal-act">
+      <button class="btn btn-cancel" onclick="closeModal()">Отмена</button>
+      <button class="btn btn-acc" onclick="saveDevice()">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/main.js"></script>
+
+</body>
+</html>

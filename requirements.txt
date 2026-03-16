@@ -1,2 +1,2 @@
-flask>=2.3.0
-paramiko>=26.0.0
+flask>=2.3
+paramiko>=3.0

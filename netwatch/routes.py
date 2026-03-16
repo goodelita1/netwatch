@@ -1,0 +1,340 @@
+"""Flask route definitions."""
+import threading
+from flask import (Blueprint, jsonify, request, render_template,
+                   session, redirect, url_for)
+from .storage  import (load_devices, save_devices, load_subnets, save_subnets,
+                        ip_to_prefix, ensure_subnet_exists)
+from .monitor  import (status_cache, latency_cache, mac_cache, vendor_cache,
+                        model_cache, ports_cache, last_scan_time,
+                        deep_scan, quick_scan,
+                        auto_discovery_state, auto_subnet_state,
+                        disc, run_discovery, sn_scan, run_subnet_scan)
+from .reboot   import reboot_device
+from .events   import (load_events, save_events, add_event,
+                       load_tg, save_tg, tg_send, tg_send_to,
+                       ping_history, _ph_lock)
+from .auth     import login_required, check_credentials, change_credentials, get_username
+
+bp = Blueprint("api", __name__)
+
+# ── Auth routes ───────────────────────────────────────────────────────────────
+@bp.route("/login", methods=["GET"])
+def login_page():
+    if session.get("logged_in"):
+        return redirect(url_for("api.index"))
+    return render_template("login.html")
+
+@bp.route("/login", methods=["POST"])
+def login_post():
+    data = request.get_json(silent=True) or {}
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+    if check_credentials(username, password):
+        session["logged_in"] = True
+        session["username"]  = username
+        return jsonify({"ok": True})
+    return jsonify({"ok": False, "error": "Неверный логин или пароль"}), 401
+
+@bp.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"ok": True})
+
+@bp.route("/api/auth/me")
+def auth_me():
+    if session.get("logged_in"):
+        return jsonify({"logged_in": True, "username": session.get("username")})
+    return jsonify({"logged_in": False}), 401
+
+@bp.route("/api/auth/change", methods=["POST"])
+@login_required
+def auth_change():
+    data = request.json or {}
+    new_u = data.get("username", "").strip()
+    new_p = data.get("password", "")
+    if not new_u or not new_p:
+        return jsonify({"error": "Логин и пароль обязательны"}), 400
+    change_credentials(new_u, new_p)
+    session["username"] = new_u
+    return jsonify({"ok": True})
+
+# ── Main page ──────────────────────────────────────────────────────────────────
+@bp.route("/")
+@login_required
+def index(): return render_template("index.html", username=session.get("username",""))
+
+@bp.route("/api/devices")
+@login_required
+def get_devices():
+    devices = load_devices()
+    out = []
+    for d in devices:
+        ip = d["ip"]
+        row = dict(d)
+        row["online"]  = status_cache.get(ip, None)
+        row["latency"] = latency_cache.get(ip, None)
+        row["mac"]     = mac_cache.get(ip, d.get("mac", ""))
+        row["vendor"]  = vendor_cache.get(ip, d.get("vendor", ""))
+        row["model"]   = model_cache.get(ip, d.get("model", ""))
+        row["ports"]   = ports_cache.get(ip, [])
+        row["has_creds"] = bool(d.get("cred_login") and d.get("cred_password"))
+        # Never expose password in API response
+        row.pop("cred_password", None)
+        out.append(row)
+    return jsonify({"devices": out, "last_scan": last_scan_time})
+
+@bp.route("/api/scan", methods=["POST"])
+@login_required
+def trigger_scan():
+    """Quick ping scan."""
+    quick_scan()
+    return jsonify({"status": "scanning"})
+
+@bp.route("/api/deep_scan", methods=["POST"])
+@login_required
+def trigger_deep_scan():
+    """Full scan: ping + ports + vendor + model."""
+    deep_scan()
+    return jsonify({"status": "deep_scanning"})
+
+@bp.route("/api/ping/<ip>")
+@login_required
+def ping_single(ip):
+    """Single device quick ping."""
+    alive, ms = ping_sync(ip)
+    status_cache[ip]  = alive
+    latency_cache[ip] = ms
+    return jsonify({"ip": ip, "alive": alive, "latency": ms})
+
+@bp.route("/api/reboot/<int:did>", methods=["POST"])
+@login_required
+def reboot_device_route(did):
+    """Reboot a device using its saved credentials."""
+    devices = load_devices()
+    device = next((d for d in devices if d["id"] == did), None)
+    if not device:
+        return jsonify({"ok": False, "detail": "Устройство не найдено"}), 404
+    result = reboot_device(device)
+    if result.get("ok"):
+        add_event("reboot", device["ip"], device.get("name", device["ip"]),
+                  f"Перезагрузка: {result.get('method','')}")
+    return jsonify(result)
+
+@bp.route("/api/events")
+@login_required
+def get_events():
+    limit = int(request.args.get("limit", 200))
+    evs = load_events()
+    return jsonify(list(reversed(evs[-limit:])))
+
+@bp.route("/api/events", methods=["DELETE"])
+@login_required
+def clear_events():
+    save_events([])
+    return jsonify({"status": "cleared"})
+
+@bp.route("/api/ping_history/<ip>")
+@login_required
+def get_ping_history(ip):
+    with _ph_lock:
+        h = list(ping_history.get(ip, []))
+    return jsonify(h)
+
+@bp.route("/api/telegram", methods=["GET"])
+@login_required
+def get_tg():
+    cfg = load_tg()
+    safe = dict(cfg)
+    safe.pop("token", None)   # never expose token in GET
+    return jsonify(safe)
+
+@bp.route("/api/telegram", methods=["POST"])
+@login_required
+def set_tg():
+    data = request.json or {}
+    cfg = load_tg()
+    for k in ("token", "enabled", "notify_power", "notify_device",
+              "notify_new_host", "down_min"):
+        if k in data: cfg[k] = data[k]
+    if "recipients" in data:
+        cfg["recipients"] = data["recipients"]
+    save_tg(cfg)
+    return jsonify({"status": "saved"})
+
+@bp.route("/api/telegram/recipients", methods=["GET"])
+@login_required
+def get_recipients():
+    cfg = load_tg()
+    return jsonify(cfg.get("recipients", []))
+
+@bp.route("/api/telegram/recipients", methods=["POST"])
+@login_required
+def add_recipient():
+    """Add a new recipient {chat_id, label}."""
+    data = request.json or {}
+    chat_id = data.get("chat_id", "").strip()
+    label   = data.get("label", chat_id).strip() or chat_id
+    if not chat_id:
+        return jsonify({"error": "chat_id required"}), 400
+    cfg = load_tg()
+    recipients = cfg.get("recipients", [])
+    if any(r["chat_id"] == chat_id for r in recipients):
+        return jsonify({"error": "already exists"}), 409
+    recipients.append({"chat_id": chat_id, "label": label, "active": True})
+    cfg["recipients"] = recipients
+    save_tg(cfg)
+    return jsonify({"ok": True, "recipients": recipients})
+
+@bp.route("/api/telegram/recipients/<chat_id>", methods=["PUT"])
+@login_required
+def update_recipient(chat_id):
+    data = request.json or {}
+    cfg = load_tg()
+    for r in cfg.get("recipients", []):
+        if r["chat_id"] == chat_id:
+            if "label"  in data: r["label"]  = data["label"]
+            if "active" in data: r["active"] = data["active"]
+            save_tg(cfg)
+            return jsonify(r)
+    return jsonify({"error": "not found"}), 404
+
+@bp.route("/api/telegram/recipients/<chat_id>", methods=["DELETE"])
+@login_required
+def delete_recipient(chat_id):
+    cfg = load_tg()
+    cfg["recipients"] = [r for r in cfg.get("recipients", [])
+                         if r["chat_id"] != chat_id]
+    save_tg(cfg)
+    return jsonify({"ok": True})
+
+@bp.route("/api/telegram/test", methods=["POST"])
+@login_required
+def test_tg():
+    """Test — send to all, or to specific chat_id if provided."""
+    data = request.json or {}
+    chat_id = data.get("chat_id", "").strip()
+    msg = "✅ <b>NetWatch</b>\nТестовое уведомление — Telegram настроен правильно!"
+    if chat_id:
+        ok = tg_send_to(msg, chat_id)
+        return jsonify({"status": "sent" if ok else "error"})
+    threading.Thread(target=tg_send, args=(msg,), daemon=True).start()
+    return jsonify({"status": "sent"})
+
+@bp.route("/api/devices", methods=["POST"])
+@login_required
+def add_device():
+    devices = load_devices(); data = request.json
+    new_id = max((d["id"] for d in devices), default=0) + 1
+    device = {"id": new_id, "ip": data["ip"], "name": data["name"],
+              "location": data.get("location", ""), "type": data.get("type", "client"),
+              "mac": data.get("mac", ""), "vendor": data.get("vendor", ""),
+              "model": data.get("model", ""),
+              "cred_login": data.get("cred_login", ""),
+              "cred_password": data.get("cred_password", "")}
+    devices.append(device); save_devices(devices)
+    ensure_subnet_exists(data["ip"])
+    return jsonify(device)
+
+@bp.route("/api/devices/<int:did>", methods=["PUT"])
+@login_required
+def update_device(did):
+    devices = load_devices()
+    for d in devices:
+        if d["id"] == did:
+            d.update(request.json); d["id"] = did
+            save_devices(devices); ensure_subnet_exists(d["ip"]); return jsonify(d)
+    return jsonify({"error": "not found"}), 404
+
+@bp.route("/api/devices/<int:did>", methods=["DELETE"])
+@login_required
+def delete_device(did):
+    save_devices([d for d in load_devices() if d["id"] != did])
+    return jsonify({"status": "deleted"})
+
+@bp.route("/api/subnets")
+@login_required
+def get_subnets():
+    subnets = load_subnets(); devices = load_devices()
+    for s in subnets:
+        s["device_count"] = sum(1 for d in devices if ip_to_prefix(d["ip"]) == s["prefix"])
+    return jsonify(subnets)
+
+@bp.route("/api/subnets", methods=["POST"])
+@login_required
+def add_subnet():
+    data = request.json; raw = data.get("prefix", "").strip()
+    if "/" in raw: raw = ".".join(raw.split("/")[0].split(".")[:3])
+    prefix = raw
+    if not prefix or len(prefix.split(".")) != 3:
+        return jsonify({"error": "invalid prefix"}), 400
+    subnets = load_subnets()
+    if any(s["prefix"] == prefix for s in subnets):
+        return jsonify({"error": "already exists"}), 409
+    entry = {"prefix": prefix, "label": f"{prefix}.0/24", "scan": data.get("scan", True)}
+    subnets.append(entry); save_subnets(subnets); return jsonify(entry)
+
+@bp.route("/api/subnets/<path:prefix>", methods=["PUT"])
+@login_required
+def update_subnet(prefix):
+    subnets = load_subnets()
+    for s in subnets:
+        if s["prefix"] == prefix:
+            s.update(request.json); s["prefix"] = prefix
+            save_subnets(subnets); return jsonify(s)
+    return jsonify({"error": "not found"}), 404
+
+@bp.route("/api/subnets/<path:prefix>", methods=["DELETE"])
+@login_required
+def delete_subnet(prefix):
+    save_subnets([s for s in load_subnets() if s["prefix"] != prefix])
+    return jsonify({"status": "deleted"})
+
+@bp.route("/api/discovery/start", methods=["POST"])
+@login_required
+def start_discovery():
+    if disc["running"]: return jsonify({"error": "already running"}), 400
+    data = request.json or {}
+    subnets = data.get("subnets") or [s["prefix"] for s in load_subnets() if s.get("scan")]
+    threading.Thread(target=run_discovery, args=(subnets,), daemon=True).start()
+    return jsonify({"status": "started"})
+
+@bp.route("/api/discovery/status")
+@login_required
+def discovery_status():
+    reg = {d["ip"] for d in load_devices()}
+    alive = [ip for ip, up in disc["results"].items() if up]
+    srt = lambda lst: sorted(lst, key=lambda x: list(map(int, x.split("."))))
+    new_dev = srt([ip for ip in alive if ip not in reg])
+    known_dev = srt([ip for ip in alive if ip in reg])
+    return jsonify({"running": disc["running"], "progress": disc["progress"],
+                    "total": disc["total"], "done": disc["done"],
+                    "alive_count": len(alive), "new_count": len(new_dev),
+                    "known_count": len(known_dev), "new_devices": new_dev,
+                    "known_devices": known_dev, "started_at": disc["started_at"],
+                    "finished_at": disc["finished_at"], "subnets": disc["subnets"]})
+
+@bp.route("/api/subnet_scan/start", methods=["POST"])
+@login_required
+def start_subnet_scan():
+    if sn_scan["running"]: return jsonify({"error": "already running"}), 400
+    threading.Thread(target=run_subnet_scan, daemon=True).start()
+    return jsonify({"status": "started"})
+
+@bp.route("/api/auto_scan/status")
+@login_required
+def auto_scan_status():
+    """Returns auto-discovery + auto-subnet state for the dashboard panel."""
+    return jsonify({"discovery": auto_discovery_state, "subnet": auto_subnet_state})
+
+@bp.route("/api/subnet_scan/status")
+@login_required
+def subnet_scan_status():
+    reg_prefixes = {s["prefix"] for s in load_subnets()}
+    alive_xs = sorted([x for x, up in sn_scan["results"].items() if up])
+    new_subs = [x for x in alive_xs if f"192.168.{x}" not in reg_prefixes]
+    known_subs = [x for x in alive_xs if f"192.168.{x}" in reg_prefixes]
+    return jsonify({"running": sn_scan["running"], "progress": sn_scan["progress"],
+                    "total": sn_scan["total"], "done": sn_scan["done"],
+                    "alive_count": len(alive_xs), "new_subnets": new_subs,
+                    "known_subnets": known_subs, "started_at": sn_scan["started_at"],
+                    "finished_at": sn_scan["finished_at"]})
