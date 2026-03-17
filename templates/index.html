@@ -34,6 +34,8 @@
   <div class="tab" onclick="switchTab('events',this)">📋 События</div>
   <div class="tab" onclick="switchTab('discovery',this)">🔍 Сканер хостов</div>
   <div class="tab" onclick="switchTab('subnets',this)">🗂 Подсети</div>
+  <div class="tab" onclick="switchTab('topology',this)">🕸 Топология</div>
+  <div class="tab" onclick="switchTab('traceroute',this)">🛤 Traceroute</div>
   <div class="tab" onclick="switchTab('settings',this)">⚙️ Настройки</div>
 </div>
 
@@ -79,6 +81,14 @@
     <div class="sc"><div class="sc-label">Средний пинг</div><div class="sc-val c" id="sAvgPing">—</div></div>
     <div class="sc"><div class="sc-label">Неизвестно</div><div class="sc-val t" id="sUnknown">—</div></div>
   </div>
+  <!-- Group action bar (hidden until selection) -->
+  <div id="groupBar" style="display:none;background:var(--sf2);border:1px solid var(--acc);border-radius:9px;padding:9px 14px;margin-bottom:12px;display:none;align-items:center;gap:10px;flex-wrap:wrap">
+    <span style="font-size:11px;font-weight:700;color:var(--acc)" id="groupBarCount">0 выбрано</span>
+    <button class="btn btn-g" style="font-size:11px;padding:5px 12px" onclick="groupPing()">⚡ Пинг всех</button>
+    <button class="btn btn-reboot" style="font-size:11px;padding:5px 12px;border-radius:6px;border:1px solid #ff3d5760;cursor:pointer;font-family:inherit;font-weight:700" onclick="groupReboot()">⟳ Reboot всех</button>
+    <button class="btn btn-ghost" style="font-size:11px;padding:5px 12px" onclick="clearSelection()">✕ Снять выбор</button>
+    <div id="groupProgress" style="font-size:10px;color:var(--muted);display:none"></div>
+  </div>
   <div class="toolbar">
     <div class="filters">
       <button class="fbtn active" onclick="setFilter('all',this)">Все</button>
@@ -101,6 +111,13 @@
           style="display:none;position:absolute;right:8px;top:50%;transform:translateY(-50%);
                  cursor:pointer;color:var(--muted);font-size:14px">✕</span>
       </div>
+      <span style="font-size:10px;color:var(--muted)">Страница:</span>
+      <select id="pageSizeSelect" onchange="setPageSize(+this.value)" style="background:var(--sf);border:1px solid var(--bd);color:var(--text);padding:5px 8px;border-radius:6px;font-family:inherit;font-size:11px;cursor:pointer">
+        <option value="25">25</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+        <option value="0">Все</option>
+      </select>
       <span style="font-size:10px;color:var(--muted)">Сортировка:</span>
       <select id="sortSelect" onchange="setSortFromSelect()" style="background:var(--sf);border:1px solid var(--bd);color:var(--text);padding:5px 8px;border-radius:6px;font-family:inherit;font-size:11px;cursor:pointer">
         <option value="ip-asc">IP ↑</option>
@@ -337,6 +354,91 @@
   </div>
 </div>
 
+
+<!-- ════ TAB: TOPOLOGY ════ -->
+<div class="tp" id="tab-topology">
+  <div class="panel">
+    <div class="panel-hdr">
+      <div>
+        <h3>🕸 Топология сети</h3>
+        <div class="panel-sub">Автоматическое построение схемы связей на основе подсетей и типов устройств</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-ghost" style="font-size:11px" onclick="topoToggleLabels()">🏷 Метки</button>
+        <button class="btn btn-ghost" style="font-size:11px" onclick="topoResetZoom()">⊕ Сброс</button>
+        <button class="btn btn-acc" style="font-size:11px" onclick="loadTopology()">↻ Обновить</button>
+      </div>
+    </div>
+    <!-- Legend -->
+    <div class="topo-legend">
+      <span class="tl-item"><span class="tl-dot" style="background:var(--red)"></span>Роутер</span>
+      <span class="tl-item"><span class="tl-dot" style="background:var(--cyan)"></span>WiFi AP</span>
+      <span class="tl-item"><span class="tl-dot" style="background:var(--pur)"></span>Камера</span>
+      <span class="tl-item"><span class="tl-dot" style="background:var(--green)"></span>Сервер</span>
+      <span class="tl-item"><span class="tl-dot" style="background:var(--muted)"></span>Клиент</span>
+      <span class="tl-item"><span class="tl-line" style="border-color:var(--acc)"></span>Подсеть</span>
+      <span class="tl-item"><span class="tl-line" style="border-color:var(--yel);border-style:dashed"></span>Backbone</span>
+    </div>
+    <!-- Tooltip -->
+    <div id="topoTooltip" class="topo-tooltip" style="display:none"></div>
+    <!-- SVG canvas -->
+    <div id="topoWrap" style="position:relative;width:100%;height:580px;background:var(--sf2);border-radius:10px;overflow:hidden;border:1px solid var(--bd)">
+      <svg id="topoSvg" style="width:100%;height:100%"></svg>
+      <div id="topoEmpty" style="display:none;position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px">Нет данных — добавьте устройства</div>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:8px">💡 Перетаскивайте узлы · Scroll = зум · Нажмите на узел для деталей</div>
+  </div>
+</div>
+
+<!-- ════ TAB: TRACEROUTE ════ -->
+<div class="tp" id="tab-traceroute">
+  <div class="panel">
+    <div class="panel-hdr">
+      <div>
+        <h3>🛤 Traceroute</h3>
+        <div class="panel-sub">Визуализация маршрута до устройства с временем отклика каждого хопа</div>
+      </div>
+    </div>
+    <!-- Target selector -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px">
+      <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:180px">
+        <label class="tg-label">IP или выберите устройство</label>
+        <input class="tg-inp" id="traceIp" placeholder="192.168.88.1" onkeydown="if(event.key==='Enter')runTraceroute()">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:180px">
+        <label class="tg-label">Быстрый выбор</label>
+        <select class="tg-inp" id="traceDevSelect" onchange="document.getElementById('traceIp').value=this.value">
+          <option value="">— из базы —</option>
+        </select>
+      </div>
+      <button class="btn btn-acc" id="traceBtn" onclick="runTraceroute()">▶ Запустить</button>
+    </div>
+    <!-- Progress -->
+    <div id="traceProgress" style="display:none;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="pulse" style="width:8px;height:8px;border-radius:50%;background:var(--acc);animation:blink .6s infinite;flex-shrink:0"></div>
+        <span style="font-size:12px;color:var(--muted)" id="traceProgressLbl">Запуск traceroute...</span>
+      </div>
+    </div>
+    <!-- Result visualization -->
+    <div id="traceResult" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px">
+        <span style="font-size:12px;font-weight:700" id="traceResultTitle"></span>
+        <span style="font-size:10px;color:var(--muted)" id="traceResultStats"></span>
+      </div>
+      <!-- Visual route diagram -->
+      <div id="traceVisual" style="margin-bottom:14px;overflow-x:auto;padding:4px 0"></div>
+      <!-- Hop table -->
+      <div id="traceTable"></div>
+    </div>
+    <div id="traceEmpty" style="text-align:center;padding:40px;color:var(--muted);font-size:12px">
+      Введите IP и нажмите «Запустить»<br>
+      <span style="font-size:10px;opacity:.6">Требует установленного <code>traceroute</code> на сервере</span>
+    </div>
+    <div id="traceError" style="display:none;padding:12px 16px;background:var(--rd);border:1px solid #ff3d5740;border-radius:8px;color:var(--red);font-size:12px"></div>
+  </div>
+</div>
+
 </div><!-- /wrap -->
 
 <!-- Device modal -->
@@ -353,6 +455,17 @@
           <option value="mobile">Мобильный</option><option value="server">Сервер</option>
         </select>
       </div>
+    </div>
+
+    <!-- Scan block -->
+    <div id="mScanBlock" style="margin-bottom:14px;padding:10px 13px;background:var(--sf2);border:1px solid var(--bd);border-radius:9px">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <button type="button" class="btn btn-cyan" id="mScanBtn" onclick="modalScanHost()" style="font-size:11px;padding:5px 12px">
+          🔬 Автозаполнить (скан)
+        </button>
+        <span style="font-size:10px;color:var(--muted)" id="mScanStatus">Введите IP и нажмите — определим MAC (только L2), вендора и модель по портам</span>
+      </div>
+      <div id="mScanPorts" style="display:none;margin-top:8px;font-size:10px;color:var(--muted)"></div>
     </div>
     <div class="fg"><label>Название</label><input id="mName" placeholder="MikroTik #1"></div>
     <div class="fg"><label>Местоположение</label><input id="mLoc" placeholder="Серверная..."></div>
@@ -383,7 +496,22 @@
   </div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
 <script src="/static/js/main.js"></script>
+
+
+<!-- SNMP Stats Modal -->
+<div class="modal-ov" id="snmpModal">
+  <div class="modal" style="max-width:560px;width:95vw">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <h2 style="font-size:15px" id="snmpModalTitle">SNMP статистика</h2>
+      <button class="btn btn-ghost" style="padding:4px 10px;font-size:12px" onclick="closeSnmpModal()">✕</button>
+    </div>
+    <div id="snmpModalBody">
+      <div style="text-align:center;padding:30px;color:var(--muted);font-size:12px">Загрузка...</div>
+    </div>
+  </div>
+</div>
 
 </body>
 </html>

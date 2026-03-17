@@ -1,8 +1,8 @@
 """Async network scanner: ping, port probe, MAC lookup, full host scan."""
 import asyncio, subprocess, time, re, platform
-from .oui import get_mac_from_arp, oui_lookup, fingerprint_device
-
-PROBE_PORTS = [22, 23, 80, 443, 554, 8080, 8291, 37777, 8443, 5000, 445, 139, 548, 62078, 8888, 161]
+from .oui import (get_mac_from_arp, oui_lookup, fingerprint_device,
+                  grab_http_banner, grab_snmp_sysdescr, parse_snmp_sysdescr,
+                  PROBE_PORTS)
 
 async def async_tcp_check(ip: str, port: int, timeout: float = 0.6) -> bool:
     try:
@@ -32,10 +32,11 @@ async def async_ping(ip: str, timeout: float = 1.0):
     except: return False, None
 
 async def async_scan_host(ip: str) -> dict:
-    """Full async scan: ping + port scan + MAC + vendor + fingerprint."""
+    """Full async scan: ping + ports + MAC + HTTP banner + SNMP + fingerprint."""
     alive, latency = await async_ping(ip)
     result = {"ip": ip, "alive": alive, "latency": latency,
-              "mac": "", "vendor": "", "model": "", "open_ports": [], "suggested_type": ""}
+              "mac": "", "vendor": "", "model": "", "open_ports": [],
+              "suggested_type": "", "http_banner": "", "snmp_sysdescr": ""}
     if not alive:
         return result
 
@@ -45,17 +46,60 @@ async def async_scan_host(ip: str) -> dict:
     open_ports = [PROBE_PORTS[i] for i, ok in enumerate(port_results) if ok]
     result["open_ports"] = open_ports
 
-    # MAC + vendor (must happen after ping so ARP is populated)
+    # MAC + vendor from ARP/OUI
     mac = get_mac_from_arp(ip)
     result["mac"] = mac
     vendor = oui_lookup(mac)
     result["vendor"] = vendor
 
-    # Fingerprint
+    # HTTP banner (non-blocking via executor)
+    loop = asyncio.get_event_loop()
+    http_info = await loop.run_in_executor(
+        None, lambda: grab_http_banner(ip, open_ports, timeout=2.5)
+    )
+    if http_info.get("server_header"):
+        result["http_banner"] = http_info["server_header"]
+    if not vendor and http_info.get("vendor"):
+        vendor = http_info["vendor"]
+        result["vendor"] = vendor
+    if not result.get("model") and http_info.get("model"):
+        result["model"] = http_info["model"]
+
+    # SNMP sysDescr — only if port 161 open
+    if 161 in open_ports:
+        sysdescr = await loop.run_in_executor(
+            None, lambda: grab_snmp_sysdescr(ip, timeout=2.0)
+        )
+        if sysdescr:
+            result["snmp_sysdescr"] = sysdescr
+            snmp = parse_snmp_sysdescr(sysdescr)
+            if snmp.get("vendor"):
+                vendor = snmp["vendor"]
+                result["vendor"] = vendor
+            if snmp.get("model"):
+                result["model"] = snmp["model"]
+
+    # Port fingerprint — fills model if still unknown
     fp = fingerprint_device(ip, vendor, open_ports)
-    result["model"] = fp["model"]
+    if not result["model"]:
+        result["model"] = fp["model"]
     result["suggested_type"] = fp["suggested_type"]
+
+    # Vendor fallback from model string (cross-subnet, no MAC)
+    if not result["vendor"] and result["model"]:
+        KNOWN_VENDORS = [
+            "MikroTik", "Ubiquiti", "Hikvision", "Dahua", "ASUS", "Huawei",
+            "Apple", "Samsung", "TP-Link", "Cisco", "VMware", "Reolink",
+            "Axis", "Synology", "QNAP", "Xiaomi", "D-Link", "Netgear",
+            "ZyXEL", "Tenda", "Fortinet", "Juniper", "Aruba",
+        ]
+        for v in KNOWN_VENDORS:
+            if v.lower() in result["model"].lower():
+                result["vendor"] = v
+                break
+
     return result
+
 
 def run_async_scan(ips: list, on_result=None, max_concurrent: int = 80) -> list:
     """Run async scan in a new event loop (thread-safe)."""

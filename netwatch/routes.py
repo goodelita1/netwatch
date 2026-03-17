@@ -10,6 +10,7 @@ from .monitor  import (status_cache, latency_cache, mac_cache, vendor_cache,
                         auto_discovery_state, auto_subnet_state,
                         disc, run_discovery, sn_scan, run_subnet_scan)
 from .reboot   import reboot_device
+from .scanner  import ping_sync
 from .events   import (load_events, save_events, add_event,
                        load_tg, save_tg, tg_send, tg_send_to,
                        ping_history, _ph_lock)
@@ -97,13 +98,35 @@ def trigger_deep_scan():
     deep_scan()
     return jsonify({"status": "deep_scanning"})
 
+@bp.route("/api/scan_host/<ip>")
+@login_required
+def scan_single_host(ip):
+    """Full async scan of a single IP: ping + ports + MAC + vendor + model."""
+    import asyncio
+    from .scanner import async_scan_host
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(async_scan_host(ip))
+    finally:
+        loop.close()
+    # Update caches
+    mac_cache[ip]    = result.get("mac", "")
+    vendor_cache[ip] = result.get("vendor", "")
+    model_cache[ip]  = result.get("model", "")
+    ports_cache[ip]  = result.get("open_ports", [])
+    status_cache[ip] = result.get("alive", None)
+    latency_cache[ip]= result.get("latency", None)
+    return jsonify(result)
+
 @bp.route("/api/ping/<ip>")
 @login_required
 def ping_single(ip):
-    """Single device quick ping."""
+    """Single device quick ping — updates cache AND ping history for sparklines."""
+    from .events import record_ping
     alive, ms = ping_sync(ip)
     status_cache[ip]  = alive
     latency_cache[ip] = ms
+    record_ping(ip, alive, ms)   # <-- keeps sparkline history in sync
     return jsonify({"ip": ip, "alive": alive, "latency": ms})
 
 @bp.route("/api/reboot/<int:did>", methods=["POST"])
@@ -338,3 +361,229 @@ def subnet_scan_status():
                     "alive_count": len(alive_xs), "new_subnets": new_subs,
                     "known_subnets": known_subs, "started_at": sn_scan["started_at"],
                     "finished_at": sn_scan["finished_at"]})
+
+# ── Traceroute ────────────────────────────────────────────────────────────────
+import subprocess, re as _re
+
+@bp.route("/api/traceroute/<ip>")
+@login_required
+def traceroute(ip):
+    """Run traceroute to target IP, return list of hops enriched with device data."""
+    if not _re.match(r'^[\d.]+$', ip):
+        return jsonify({"error": "invalid ip"}), 400
+
+    devices = load_devices()
+    dev_map  = {d["ip"]: d for d in devices}
+
+    def enrich(hop_ip, hop_num, ms):
+        dev = dev_map.get(hop_ip)
+        return {
+            "hop":    hop_num,
+            "ip":     hop_ip,
+            "ms":     ms,
+            "name":   dev["name"]            if dev else "",
+            "vendor": dev.get("vendor", "")  if dev else "",
+            "model":  dev.get("model",  "")  if dev else "",
+            "type":   dev.get("type",   "")  if dev else "",
+            "known":  bool(dev),
+            "online": status_cache.get(hop_ip, None) if dev else None,
+        }
+
+    # Hop 0 — the NetWatch server itself (local interface toward target)
+    import socket as _sock
+    try:
+        local_ip = _sock.gethostbyname(_sock.gethostname())
+    except Exception:
+        local_ip = "127.0.0.1"
+    hops = [enrich(local_ip, 0, 0)]
+
+    try:
+        result = subprocess.run(
+            ["traceroute", "-n", "-m", "20", "-w", "1", "-q", "2", ip],
+            capture_output=True, text=True, timeout=35
+        )
+        lines = result.stdout.strip().split("\n")
+        for line in lines[1:]:
+            # Match line with at least one timing: "  1  192.168.1.1  1.234 ms"
+            m = _re.match(r'\s*(\d+)\s+(\S+)\s+([\d.]+)\s*ms', line)
+            if m:
+                hop_num = int(m.group(1))
+                hop_ip  = m.group(2)
+                # Average multiple probes if present
+                times = [float(x) for x in _re.findall(r'([\d.]+)\s*ms', line)]
+                ms = round(sum(times) / len(times), 3) if times else float(m.group(3))
+                hops.append(enrich(hop_ip, hop_num, ms))
+            else:
+                m2 = _re.match(r'\s*(\d+)\s+\*', line)
+                if m2:
+                    hops.append({"hop": int(m2.group(1)), "ip": "*", "ms": None,
+                                 "name": "", "vendor": "", "model": "", "type": "",
+                                 "known": False, "online": None})
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "timeout", "hops": hops, "target": ip})
+    except FileNotFoundError:
+        return jsonify({"error": "traceroute_not_found", "hops": hops, "target": ip})
+    except Exception as e:
+        return jsonify({"error": str(e), "hops": hops, "target": ip})
+
+    return jsonify({"hops": hops, "target": ip, "source": local_ip})
+
+# ── Topology ──────────────────────────────────────────────────────────────────
+from .monitor import status_cache, latency_cache
+
+@bp.route("/api/topology")
+@login_required
+def get_topology():
+    """Build network topology: nodes, smart edges, subnet zones."""
+    devices  = load_devices()
+    subnets  = load_subnets()
+    ip_set   = {d["ip"] for d in devices}
+    dev_map  = {d["ip"]: d for d in devices}
+
+    # ── Nodes ─────────────────────────────────────────────────────────────────
+    nodes = []
+    for d in devices:
+        pfx = ".".join(d["ip"].split(".")[:3])
+        nodes.append({
+            "id":      d["ip"],
+            "name":    d.get("name", d["ip"]),
+            "type":    d.get("type", "client"),
+            "vendor":  d.get("vendor", ""),
+            "model":   d.get("model", ""),
+            "ip":      d["ip"],
+            "online":  status_cache.get(d["ip"], None),
+            "latency": latency_cache.get(d["ip"], None),
+            "subnet":  pfx,
+        })
+
+    # ── Group devices by subnet prefix ────────────────────────────────────────
+    subnet_devs = {}   # prefix → [ip, ...]
+    for d in devices:
+        pfx = ".".join(d["ip"].split(".")[:3])
+        subnet_devs.setdefault(pfx, []).append(d["ip"])
+
+    # ── Find gateway for each subnet ──────────────────────────────────────────
+    # Priority: device with type=router at .1, else any router, else .1 if exists, else lowest IP
+    def find_gw(pfx, ips):
+        # 1. router/ap at .1
+        cand = pfx + ".1"
+        if cand in ip_set and dev_map[cand].get("type") in ("router","ap",""):
+            return cand
+        # 2. any router in subnet
+        for ip in sorted(ips):
+            if dev_map.get(ip, {}).get("type") in ("router", "ap"):
+                return ip
+        # 3. .1 even if not router type
+        if cand in ip_set:
+            return cand
+        # 4. lowest IP
+        return sorted(ips, key=lambda x: list(map(int, x.split("."))))[0] if ips else None
+
+    subnet_gw = {pfx: find_gw(pfx, ips) for pfx, ips in subnet_devs.items()}
+
+    # ── Build edges ───────────────────────────────────────────────────────────
+    edges = []
+    edge_set = set()
+
+    def add_edge(src, tgt, etype):
+        key = (min(src,tgt), max(src,tgt))
+        if key not in edge_set and src in ip_set and tgt in ip_set:
+            edge_set.add(key)
+            edges.append({"source": src, "target": tgt, "type": etype})
+
+    # 1. Each device → its subnet gateway (star topology within subnet)
+    for pfx, ips in subnet_devs.items():
+        gw = subnet_gw.get(pfx)
+        if not gw: continue
+        for ip in ips:
+            if ip != gw:
+                add_edge(gw, ip, "subnet")
+
+    # 2. Gateway ↔ gateway backbone links
+    # Heuristic: gateways in different /24 subnets on the same /16 are likely connected
+    # Connect each gateway to the "most likely upstream" router:
+    # - routers connect to other routers in different /16 or different /24 that have fewer devices
+    gws = [(pfx, gw) for pfx, gw in subnet_gw.items() if gw]
+    routers = [(pfx, gw) for pfx, gw in gws
+               if dev_map.get(gw, {}).get("type") in ("router", "ap", "")]
+
+    # Build a spanning tree of gateways: each gateway connects to the gateway
+    # in the most "different" subnet (different third octet) that has type=router
+    # Simple approach: sort gateways by subnet, chain them with backbone links
+    gw_ips = sorted(set(gw for _, gw in gws), key=lambda x: list(map(int, x.split("."))))
+
+    # Find cross-subnet router pairs
+    def third_octet(ip): return int(ip.split(".")[2])
+
+    # Group gateways by second octet (192.168.X → group by X)
+    by_second = {}
+    for gw in gw_ips:
+        parts = gw.split(".")
+        if len(parts) == 4:
+            key = (parts[0], parts[1])
+            by_second.setdefault(key, []).append(gw)
+
+    # Within each /16 group: connect gateways in a tree
+    for group_gws in by_second.values():
+        sorted_gws = sorted(group_gws, key=lambda x: list(map(int, x.split("."))))
+        # Find routers first
+        group_routers = [gw for gw in sorted_gws
+                         if dev_map.get(gw, {}).get("type") in ("router", "ap")]
+        group_others  = [gw for gw in sorted_gws if gw not in group_routers]
+
+        # Connect routers in a chain
+        for i in range(len(group_routers) - 1):
+            add_edge(group_routers[i], group_routers[i+1], "backbone")
+
+        # Connect non-router gateways to nearest router
+        if group_routers:
+            for gw in group_others:
+                # nearest router by IP distance
+                nearest = min(group_routers,
+                    key=lambda r: abs(list(map(int,r.split(".")))[-1] -
+                                     list(map(int,gw.split(".")))[-1]))
+                add_edge(nearest, gw, "backbone")
+
+    # 3. Cross-/16 backbone (e.g. 192.168.83.x ↔ 192.168.88.x)
+    group_keys = sorted(by_second.keys())
+    group_reps = []
+    for k in group_keys:
+        gws_in_group = by_second[k]
+        rep = next((gw for gw in sorted(gws_in_group)
+                    if dev_map.get(gw,{}).get("type") in ("router","ap")), gws_in_group[0])
+        group_reps.append(rep)
+    for i in range(len(group_reps) - 1):
+        add_edge(group_reps[i], group_reps[i+1], "wan")
+
+    # ── Subnet zone metadata for frontend ────────────────────────────────────
+    subnet_info = []
+    for s in subnets:
+        pfx = s["prefix"]
+        gw  = subnet_gw.get(pfx)
+        cnt = len(subnet_devs.get(pfx, []))
+        subnet_info.append({
+            "prefix":  pfx,
+            "label":   s.get("label", pfx + ".0/24"),
+            "gateway": gw,
+            "count":   cnt,
+        })
+
+    return jsonify({
+        "nodes":   nodes,
+        "edges":   edges,
+        "subnets": subnet_info,
+    })
+
+# ── SNMP Stats endpoint ───────────────────────────────────────────────────────
+from .oui import grab_snmp_stats
+
+@bp.route("/api/snmp/<ip>")
+@login_required
+def snmp_stats(ip):
+    """Poll full SNMP stats for a single device."""
+    import re as _re2
+    if not _re2.match(r'^[\d.]+$', ip):
+        return jsonify({"error": "invalid ip"}), 400
+    data = request.args.get("community", "public")
+    result = grab_snmp_stats(ip, community=data)
+    return jsonify(result)
