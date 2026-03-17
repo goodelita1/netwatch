@@ -28,3 +28,4 @@ subnets.json
 events.json
 telegram.json
 auth.json
+.secret_key
