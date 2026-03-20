@@ -2,8 +2,11 @@
 import threading
 from flask import (Blueprint, jsonify, request, render_template,
                    session, redirect, url_for)
-from .storage  import (load_devices, save_devices, load_subnets, save_subnets,
-                        ip_to_prefix, ensure_subnet_exists)
+from .storage  import (load_devices, save_devices,
+                        load_subnets,  save_subnets,
+                        add_device,    update_device,   delete_device,
+                        add_subnet,    update_subnet,   delete_subnet,
+                        ip_to_prefix,  ensure_subnet_exists)
 from .monitor  import (status_cache, latency_cache, mac_cache, vendor_cache,
                         model_cache, ports_cache, last_scan_time,
                         deep_scan, quick_scan,
@@ -180,15 +183,126 @@ def get_events():
 @bp.route("/api/events", methods=["DELETE"])
 @login_required
 def clear_events():
-    save_events([])
+    from .db import _execute as _dbexec
+    _dbexec("DELETE FROM events")
     return jsonify({"status": "cleared"})
 
 @bp.route("/api/ping_history/<ip>")
 @login_required
 def get_ping_history(ip):
+    # Return in-memory ring buffer (fast, covers last 2.4h)
     with _ph_lock:
         h = list(ping_history.get(ip, []))
     return jsonify(h)
+
+@bp.route("/api/ping_history/<ip>/db")
+@login_required
+def get_ping_history_db(ip):
+    """Return up to 24h of ping history from SQLite (for dashboard)."""
+    hours = int(request.args.get("hours", 24))
+    return jsonify(load_ping_history_from_db(ip, hours=hours))
+
+@bp.route("/api/dashboard")
+@login_required
+def get_dashboard():
+    """
+    Aggregate data for the dashboard:
+    - Per-device: ping history (last 144 points), uptime %, avg/min/max latency
+    - Global: timeline of down events for the last 24h
+    - Top-5 slowest devices (by avg latency)
+    - Top-5 most unstable (by downtime %)
+    """
+    import time as _t
+    devices  = load_devices()
+    now      = _t.time()
+    day_ago  = now - 86400
+
+    # Load all events for uptime calc
+    evs = load_events()
+
+    with _ph_lock:
+        ph_snapshot = {ip: list(dq) for ip, dq in ping_history.items()}
+
+    result = {"devices": [], "timeline": [], "top_slow": [], "top_unstable": []}
+
+    for d in devices:
+        ip   = d["ip"]
+        name = d.get("name", ip)
+        hist = ph_snapshot.get(ip, [])
+
+        # Filter to last 24h
+        hist24 = [p for p in hist if p["ts"] >= day_ago]
+
+        if not hist24:
+            result["devices"].append({
+                "ip": ip, "name": name,
+                "uptime_pct": None, "avg_ms": None,
+                "min_ms": None, "max_ms": None,
+                "history": [], "online": status_cache.get(ip, None)
+            })
+            continue
+
+        total   = len(hist24)
+        up_cnt  = sum(1 for p in hist24 if p["alive"])
+        latencies = [p["ms"] for p in hist24 if p["alive"] and p["ms"] is not None]
+
+        uptime_pct = round(up_cnt / total * 100, 1) if total else None
+        avg_ms     = round(sum(latencies) / len(latencies), 1) if latencies else None
+        min_ms     = round(min(latencies), 1) if latencies else None
+        max_ms     = round(max(latencies), 1) if latencies else None
+
+        # Downsample history to max 144 points for chart
+        result["devices"].append({
+            "ip": ip, "name": name,
+            "uptime_pct": uptime_pct,
+            "avg_ms": avg_ms, "min_ms": min_ms, "max_ms": max_ms,
+            "history": [{"ts": p["ts"], "ms": p["ms"], "alive": p["alive"]}
+                        for p in hist24],
+            "online": status_cache.get(ip, None)
+        })
+
+    # Global down events timeline (last 24h, group by hour)
+    hour_buckets = [0] * 24
+    for ev in evs:
+        if ev.get("kind") == "down" and ev["ts"] >= day_ago:
+            h = int((now - ev["ts"]) / 3600)
+            if 0 <= h < 24:
+                hour_buckets[23 - h] += 1
+    result["timeline"] = hour_buckets
+
+    # Top-5 slowest
+    ranked_lat = sorted(
+        [d for d in result["devices"] if d["avg_ms"] is not None],
+        key=lambda x: x["avg_ms"], reverse=True
+    )[:5]
+    result["top_slow"] = [
+        {"name": d["name"], "ip": d["ip"], "avg_ms": d["avg_ms"]}
+        for d in ranked_lat
+    ]
+
+    # Top-5 most unstable (lowest uptime)
+    ranked_up = sorted(
+        [d for d in result["devices"] if d["uptime_pct"] is not None],
+        key=lambda x: x["uptime_pct"]
+    )[:5]
+    result["top_unstable"] = [
+        {"name": d["name"], "ip": d["ip"], "uptime_pct": d["uptime_pct"]}
+        for d in ranked_up
+    ]
+
+    # Summary stats
+    all_up  = [d["uptime_pct"] for d in result["devices"] if d["uptime_pct"] is not None]
+    all_lat = [d["avg_ms"]    for d in result["devices"] if d["avg_ms"] is not None]
+    result["summary"] = {
+        "total":     len(devices),
+        "online":    sum(1 for v in status_cache.values() if v is True),
+        "offline":   sum(1 for v in status_cache.values() if v is False),
+        "avg_uptime_pct": round(sum(all_up) / len(all_up), 1) if all_up else None,
+        "avg_latency_ms": round(sum(all_lat) / len(all_lat), 1) if all_lat else None,
+    }
+
+    return jsonify(result)
+
 
 @bp.route("/api/telegram", methods=["GET"])
 @login_required
@@ -272,33 +386,33 @@ def test_tg():
 
 @bp.route("/api/devices", methods=["POST"])
 @login_required
-def add_device():
-    devices = load_devices(); data = request.json
-    new_id = max((d["id"] for d in devices), default=0) + 1
-    device = {"id": new_id, "ip": data["ip"], "name": data["name"],
-              "location": data.get("location", ""), "type": data.get("type", "client"),
-              "mac": data.get("mac", ""), "vendor": data.get("vendor", ""),
-              "model": data.get("model", ""),
-              "cred_login": data.get("cred_login", ""),
-              "cred_password": data.get("cred_password", "")}
-    devices.append(device); save_devices(devices)
-    ensure_subnet_exists(data["ip"])
-    return jsonify(device)
+def add_device_route():
+    data = request.json or {}
+    if not data.get("ip"):
+        return jsonify({"error": "ip required"}), 400
+    data = {k: (v.strip() if isinstance(v, str) else v) for k, v in data.items()}
+    from .storage import add_device as _add
+    device = _add(data)
+    device["has_creds"] = bool(device.get("cred_login"))
+    return jsonify(device), 201
 
 @bp.route("/api/devices/<int:did>", methods=["PUT"])
 @login_required
-def update_device(did):
-    devices = load_devices()
-    for d in devices:
-        if d["id"] == did:
-            d.update(request.json); d["id"] = did
-            save_devices(devices); ensure_subnet_exists(d["ip"]); return jsonify(d)
-    return jsonify({"error": "not found"}), 404
+def update_device_route(did):
+    data = request.json or {}
+    data = {k: (v.strip() if isinstance(v, str) else v) for k, v in data.items()}
+    from .storage import update_device as _upd
+    device = _upd(did, data)
+    if not device:
+        return jsonify({"error": "not found"}), 404
+    device["has_creds"] = bool(device.get("cred_login"))
+    return jsonify(device)
 
 @bp.route("/api/devices/<int:did>", methods=["DELETE"])
 @login_required
-def delete_device(did):
-    save_devices([d for d in load_devices() if d["id"] != did])
+def delete_device_route(did):
+    from .storage import delete_device as _del
+    _del(did)
     return jsonify({"status": "deleted"})
 
 @bp.route("/api/subnets")
@@ -311,32 +425,34 @@ def get_subnets():
 
 @bp.route("/api/subnets", methods=["POST"])
 @login_required
-def add_subnet():
-    data = request.json; raw = data.get("prefix", "").strip()
+def add_subnet_route():
+    data = request.json or {}
+    raw = data.get("prefix", "").strip()
     if "/" in raw: raw = ".".join(raw.split("/")[0].split(".")[:3])
     prefix = raw
     if not prefix or len(prefix.split(".")) != 3:
         return jsonify({"error": "invalid prefix"}), 400
-    subnets = load_subnets()
-    if any(s["prefix"] == prefix for s in subnets):
+    from .storage import add_subnet as _add_sn
+    existing = load_subnets()
+    if any(s["prefix"] == prefix for s in existing):
         return jsonify({"error": "already exists"}), 409
-    entry = {"prefix": prefix, "label": f"{prefix}.0/24", "scan": data.get("scan", True)}
-    subnets.append(entry); save_subnets(subnets); return jsonify(entry)
+    entry = _add_sn(prefix, data.get("label", f"{prefix}.0/24"), bool(data.get("scan", True)))
+    return jsonify(entry)
 
 @bp.route("/api/subnets/<path:prefix>", methods=["PUT"])
 @login_required
-def update_subnet(prefix):
-    subnets = load_subnets()
-    for s in subnets:
-        if s["prefix"] == prefix:
-            s.update(request.json); s["prefix"] = prefix
-            save_subnets(subnets); return jsonify(s)
-    return jsonify({"error": "not found"}), 404
+def update_subnet_route(prefix):
+    from .storage import update_subnet as _upd_sn
+    result = _upd_sn(prefix, {k: v for k, v in (request.json or {}).items()
+                               if k in ("label", "scan")})
+    if not result: return jsonify({"error": "not found"}), 404
+    return jsonify(result)
 
 @bp.route("/api/subnets/<path:prefix>", methods=["DELETE"])
 @login_required
-def delete_subnet(prefix):
-    save_subnets([s for s in load_subnets() if s["prefix"] != prefix])
+def delete_subnet_route(prefix):
+    from .storage import delete_subnet as _del_sn
+    _del_sn(prefix)
     return jsonify({"status": "deleted"})
 
 @bp.route("/api/discovery/start", methods=["POST"])

@@ -3,13 +3,10 @@ NetWatch — Configuration & constants
 """
 import os
 
-DEVICES_FILE  = "devices.json"
-SUBNETS_FILE  = "subnets.json"
-EVENTS_FILE   = "events.json"
-TG_FILE       = "telegram.json"
-POWER_IP      = "192.168.88.1"   # gateway — if offline → power outage
+# ── Убраны пути к JSON файлам — теперь всё в SQLite ──────────────────────────
+# Оставлены только те константы которые реально используются в коде
 
-# Ping history depth: 144 × 60s ≈ 2.4h
-PHIST_MAX = 144
+POWER_IP  = "192.168.88.1"   # шлюз-индикатор питания: если offline → «нет света»
+PHIST_MAX = 144               # глубина ring buffer (144 × 60с ≈ 2.4ч)
 
-AUTH_FILE     = "auth.json"
+AUTH_FILE = "auth.json"       # используется auth.py для backward-compat при первом запуске

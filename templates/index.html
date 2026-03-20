@@ -75,6 +75,7 @@
 
 <div class="tabs">
   <div class="tab active" onclick="switchTab('monitor',this)">📡 Мониторинг</div>
+  <div class="tab" onclick="switchTab('dashboard',this)">📊 Дашборд</div>
   <div class="tab" onclick="switchTab('events',this)">📋 События</div>
   <div class="tab" onclick="switchTab('discovery',this)">🔍 Сканер хостов</div>
   <div class="tab" onclick="switchTab('subnets',this)">🗂 Подсети</div>
@@ -159,6 +160,64 @@
 </div>
 
 <!-- ════ TAB: EVENTS ════ -->
+<!-- ════ TAB: DASHBOARD ════ -->
+<div class="tp" id="tab-dashboard">
+  <!-- Summary cards -->
+  <div class="stats" id="dashStats" style="margin-bottom:18px">
+    <div class="sc"><div class="sc-label">Всего устройств</div><div class="sc-val t" id="dashTotal">—</div></div>
+    <div class="sc"><div class="sc-label">Онлайн сейчас</div><div class="sc-val g" id="dashOnline">—</div></div>
+    <div class="sc"><div class="sc-label">Оффлайн</div><div class="sc-val r" id="dashOffline">—</div></div>
+    <div class="sc"><div class="sc-label">Средний uptime 24ч</div><div class="sc-val c" id="dashUptime">—</div></div>
+    <div class="sc"><div class="sc-label">Средний пинг 24ч</div><div class="sc-val t" id="dashAvgLat">—</div></div>
+  </div>
+
+  <!-- Top row: timeline + top-5 -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+    <!-- Down events timeline -->
+    <div class="panel" style="margin:0">
+      <div class="panel-hdr" style="margin-bottom:10px">
+        <h3>📉 Падения за 24 часа</h3>
+        <span class="panel-sub">по часам</span>
+      </div>
+      <div style="position:relative;height:140px"><canvas id="dashTimelineChart"></canvas></div>
+    </div>
+    <!-- Top-5 latency -->
+    <div class="panel" style="margin:0">
+      <div class="panel-hdr" style="margin-bottom:10px">
+        <h3>🐢 Топ-5 по задержке</h3>
+        <span class="panel-sub">средний пинг 24ч</span>
+      </div>
+      <div style="position:relative;height:140px"><canvas id="dashTopLatChart"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Uptime per device -->
+  <div class="panel" style="margin-bottom:14px">
+    <div class="panel-hdr" style="margin-bottom:12px">
+      <h3>✅ Uptime по устройствам — 24 часа</h3>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span class="panel-sub" id="dashUptimeNote"></span>
+        <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="loadDashboard()">↻</button>
+      </div>
+    </div>
+    <div id="dashUptimeList" style="display:flex;flex-direction:column;gap:5px"></div>
+  </div>
+
+  <!-- Ping history per device -->
+  <div class="panel" style="margin-bottom:0">
+    <div class="panel-hdr" style="margin-bottom:10px">
+      <h3>📈 История пинга — 24 часа</h3>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="dashDevSelect" onchange="renderDashPingChart()" style="background:var(--sf);border:1px solid var(--bd);color:var(--text);padding:4px 8px;border-radius:5px;font-family:inherit;font-size:11px">
+          <option value="">— выберите устройство —</option>
+        </select>
+      </div>
+    </div>
+    <div style="position:relative;height:180px"><canvas id="dashPingChart"></canvas></div>
+    <div id="dashPingStats" style="display:flex;gap:14px;margin-top:10px;flex-wrap:wrap;font-size:11px;color:var(--muted)"></div>
+  </div>
+</div>
+
 <div class="tp" id="tab-events">
   <div class="panel">
     <div class="panel-hdr">
@@ -532,6 +591,7 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="/static/js/main.js"></script>
 
 

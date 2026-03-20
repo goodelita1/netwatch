@@ -27,3 +27,6 @@ devices.json
 *.bak
 auth.json
 subnets.json
+events.json
+telegram.json
+netwatch.db
