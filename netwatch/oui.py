@@ -761,105 +761,339 @@ def _decode_snmp_value(vtype: int, raw: bytes):
     return None
 
 
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SNMP engine — batched GetRequest with robust parser
+# ══════════════════════════════════════════════════════════════════════════════
+
+IF_DESCR_BASE     = "1.3.6.1.2.1.2.2.1.2"
+IF_TYPE_BASE      = "1.3.6.1.2.1.2.2.1.3"
+IF_OPER_BASE      = "1.3.6.1.2.1.2.2.1.8"
+IF_ADMIN_BASE     = "1.3.6.1.2.1.2.2.1.7"
+IF_SPEED_BASE     = "1.3.6.1.2.1.2.2.1.5"
+IF_IN_OCT_BASE    = "1.3.6.1.2.1.2.2.1.10"
+IF_OUT_OCT_BASE   = "1.3.6.1.2.1.2.2.1.16"
+IF_IN_ERR_BASE    = "1.3.6.1.2.1.2.2.1.14"
+IF_OUT_ERR_BASE   = "1.3.6.1.2.1.2.2.1.20"
+IF_IN_UCAST_BASE  = "1.3.6.1.2.1.2.2.1.11"
+IF_OUT_UCAST_BASE = "1.3.6.1.2.1.2.2.1.17"
+
+SYS_DESCR    = "1.3.6.1.2.1.1.1.0"
+SYS_UPTIME   = "1.3.6.1.2.1.1.3.0"
+SYS_NAME     = "1.3.6.1.2.1.1.5.0"
+SYS_CONTACT  = "1.3.6.1.2.1.1.4.0"
+SYS_LOCATION = "1.3.6.1.2.1.1.6.0"
+HR_CPU_LOAD  = "1.3.6.1.2.1.25.3.3.1.2.1"
+HR_MEM_TOTAL = "1.3.6.1.2.1.25.2.2.0"
+UCD_CPU_IDLE = "1.3.6.1.4.1.2021.11.11.0"
+MT_CPU_LOAD  = "1.3.6.1.4.1.14988.1.1.3.14.0"
+MT_MEM_TOTAL = "1.3.6.1.4.1.14988.1.1.3.15.0"
+MT_MEM_FREE  = "1.3.6.1.4.1.14988.1.1.3.16.0"
+MT_VOLTAGE   = "1.3.6.1.4.1.14988.1.1.3.8.0"
+MT_TEMP      = "1.3.6.1.4.1.14988.1.1.3.10.0"
+
+
+def _enc_len(l: int) -> bytes:
+    if l < 128: return bytes([l])
+    if l < 256: return bytes([0x81, l])
+    return bytes([0x82, l >> 8, l & 0xFF])
+
+
+def _enc_oid(s: str) -> bytes:
+    """Encode dotted-decimal OID string to BER bytes (tag+len+value)."""
+    p = list(map(int, s.split(".")))
+    body = bytes([40 * p[0] + p[1]])
+    for x in p[2:]:
+        if x == 0:
+            body += b"\x00"
+        elif x < 128:
+            body += bytes([x])
+        else:
+            enc, tmp = [], x
+            while tmp: enc.append(tmp & 0x7F); tmp >>= 7
+            enc.reverse()
+            body += bytes([b | (0x80 if i < len(enc)-1 else 0) for i, b in enumerate(enc)])
+    return b"\x06" + _enc_len(len(body)) + body
+
+
+def _dec_oid(raw: bytes) -> str:
+    """Decode BER OID bytes (no tag/len prefix) to dotted string."""
+    if not raw: return ""
+    parts = [raw[0] // 40, raw[0] % 40]
+    i, n = 1, len(raw)
+    while i < n:
+        if raw[i] & 0x80:
+            acc = 0
+            while i < n and raw[i] & 0x80:
+                acc = (acc << 7) | (raw[i] & 0x7F); i += 1
+            if i < n:
+                parts.append((acc << 7) | raw[i])
+            i += 1
+        else:
+            parts.append(raw[i]); i += 1
+    return ".".join(map(str, parts))
+
+
+def _dec_val(vtype: int, raw: bytes):
+    """Decode SNMP value by ASN.1 type tag."""
+    if vtype == 0x02: return int.from_bytes(raw, "big", signed=True)
+    if vtype == 0x04:
+        try: return raw.decode("utf-8", errors="replace").strip("\x00").strip()
+        except: return raw.hex()
+    if vtype in (0x41, 0x42, 0x46): return int.from_bytes(raw, "big")   # Counter/Gauge/Counter64
+    if vtype == 0x43: return int.from_bytes(raw, "big")                  # TimeTicks
+    if vtype == 0x06: return _dec_oid(raw)                               # OID in value
+    return None
+
+
+def _read_len(data: bytes, pos: int):
+    """Read BER length at pos, return (length, next_pos)."""
+    if pos >= len(data): return 0, pos
+    b = data[pos]
+    if b < 128: return b, pos + 1
+    nb = b & 0x7F
+    if nb == 0 or pos + nb >= len(data): return 0, pos + 1
+    return int.from_bytes(data[pos+1:pos+1+nb], "big"), pos + 1 + nb
+
+
+def _parse_pkt(data: bytes) -> dict:
+    """
+    Parse raw SNMP GetResponse UDP payload.
+    Returns dict: {oid_str → (vtype, raw_bytes)}
+    Uses a robust recursive descent parser that handles variable-length fields.
+    """
+    result = {}
+
+    def parse_seq(buf: bytes, pos: int, end: int):
+        while pos < end:
+            if pos >= len(buf): break
+            tag = buf[pos]; pos += 1
+            if pos >= len(buf): break
+            length, pos = _read_len(buf, pos)
+            content_end = pos + length
+            if content_end > len(buf): break
+
+            if tag == 0x30 or (tag & 0xe0) == 0xa0:  # SEQUENCE or context [0xa0..0xaf]
+                parse_seq(buf, pos, content_end)
+            elif tag == 0x06:  # OID — this is a varbind key
+                oid_str = _dec_oid(buf[pos:pos+length])
+                vpos = content_end
+                if vpos < len(buf):
+                    vtag = buf[vpos]; vpos += 1
+                    vlen, vpos = _read_len(buf, vpos)
+                    raw = buf[vpos:vpos+vlen]
+                    result[oid_str] = (vtag, raw)
+            pos = content_end
+
+    parse_seq(data, 0, len(data))
+    return result
+
+
+def _snmp_batch(ip: str, oids: list, community: str = "public",
+                timeout: float = 3.0, batch_size: int = 10) -> dict:
+    """
+    Send SNMPv1 GetRequests in batches of batch_size OIDs.
+    MikroTik handles ~10 OIDs per packet reliably.
+    Returns merged dict {oid_str: (vtype, raw)}.
+    """
+    result = {}
+    for i in range(0, len(oids), batch_size):
+        chunk = oids[i:i+batch_size]
+        raw = _snmp_single_batch(ip, chunk, community, timeout)
+        result.update(raw)
+    return result
+
+
+def _snmp_single_batch(ip: str, oids: list, community: str,
+                        timeout: float) -> dict:
+    """Send one UDP GetRequest packet for the given OID list."""
+    try:
+        varbinds = b"".join(
+            b"\x30" + _enc_len(len(_enc_oid(o)) + 2) + _enc_oid(o) + b"\x05\x00"
+            for o in oids
+        )
+        vblist   = b"\x30" + _enc_len(len(varbinds)) + varbinds
+        pdu_body = b"\x02\x01\x01\x02\x01\x00\x02\x01\x00" + vblist
+        pdu      = b"\xa0" + _enc_len(len(pdu_body)) + pdu_body
+        comm     = community.encode()
+        msg_body = b"\x02\x01\x00" + b"\x04" + _enc_len(len(comm)) + comm + pdu
+        msg      = b"\x30" + _enc_len(len(msg_body)) + msg_body
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        sock.sendto(msg, (ip, 161))
+        data, _ = sock.recvfrom(65535)
+        sock.close()
+        return _parse_pkt(data)
+    except Exception:
+        return {}
+
+
+# Keep old function name for backward compat (scanner.py uses it)
+def _mk_get_multi(ip, oids, community="public", timeout=2.5):
+    return _snmp_batch(ip, oids, community, timeout, batch_size=10)
+
+def _dec(vtype, raw):
+    return _dec_val(vtype, raw)
+
+
 def grab_snmp_stats(ip: str, community: str = "public") -> dict:
     """
-    Full SNMP poll: sysDescr, uptime, sysName, CPU load, RAM, interfaces.
-    Returns structured dict ready for JSON serialisation.
+    Full SNMP poll: system info + ALL interfaces (auto-discover up to 32).
+    Batch size 10 — compatible with MikroTik, Cisco, Ubiquiti etc.
     """
     result = {
-        "ok": False,
-        "sysdescr": "", "sysname": "",
+        "ok": False, "error": "",
+        "sysdescr": "", "sysname": "", "contact": "", "location": "",
         "uptime_ticks": None, "uptime_str": "",
         "cpu_pct": None,
-        "mem_total_kb": None, "mem_used_kb": None, "mem_pct": None,
+        "mem_total_mb": None, "mem_free_mb": None, "mem_used_pct": None,
+        "voltage_v": None, "temp_c": None,
+        "is_mikrotik": False,
         "interfaces": [],
-        "error": ""
     }
 
-    # Batch 1: system info + CPU + RAM
-    batch1_oids = [
-        SNMP_OIDS["sysDescr"], SNMP_OIDS["sysUpTime"], SNMP_OIDS["sysName"],
-        SNMP_OIDS["cpuLoad"], SNMP_OIDS["ucpuIdle"], SNMP_OIDS["hrMemSize"],
+    # ── Batch 1: system + CPU + RAM (13 OIDs, split into 2 packets) ──────────
+    sys_oids = [
+        SYS_DESCR, SYS_UPTIME, SYS_NAME, SYS_CONTACT, SYS_LOCATION,
+        HR_CPU_LOAD, UCD_CPU_IDLE, HR_MEM_TOTAL,
+        MT_CPU_LOAD, MT_MEM_TOTAL, MT_MEM_FREE, MT_VOLTAGE, MT_TEMP,
     ]
-    raw1 = _snmp_get_multi(ip, batch1_oids, community)
+    raw1 = _snmp_batch(ip, sys_oids, community, timeout=3.0, batch_size=10)
     if not raw1:
-        result["error"] = "No SNMP response (community mismatch or SNMP disabled)"
+        result["error"] = "Нет ответа SNMP. Включите: IP → SNMP → enabled=yes, community=public"
         return result
 
     result["ok"] = True
 
-    def get(oid_key):
-        oid = SNMP_OIDS.get(oid_key, oid_key)
-        val = raw1.get(oid)
-        if val is None:
-            # try with stripped leading 1.
-            for k, v in raw1.items():
-                if k.endswith(oid.lstrip("1.3.6.1")) or k == oid:
-                    return _decode_snmp_value(v[0], v[1])
-            return None
-        return _decode_snmp_value(val[0], val[1])
+    def g(oid):
+        v = raw1.get(oid)
+        return _dec_val(v[0], v[1]) if v else None
 
-    result["sysdescr"] = get("sysDescr") or ""
-    result["sysname"]  = get("sysName") or ""
+    result["sysdescr"]  = g(SYS_DESCR)  or ""
+    result["sysname"]   = g(SYS_NAME)   or ""
+    result["contact"]   = g(SYS_CONTACT)  or ""
+    result["location"]  = g(SYS_LOCATION) or ""
 
-    uptime = get("sysUpTime")
+    uptime = g(SYS_UPTIME)
     if isinstance(uptime, int):
         result["uptime_ticks"] = uptime
         s = uptime // 100
-        d, s = divmod(s, 86400)
-        h, s = divmod(s, 3600)
-        m, s = divmod(s, 60)
-        if d:   result["uptime_str"] = f"{d}д {h:02d}:{m:02d}:{s:02d}"
-        else:   result["uptime_str"] = f"{h:02d}:{m:02d}:{s:02d}"
+        d, rem = divmod(s, 86400); h, rem = divmod(rem, 3600); m2, s2 = divmod(rem, 60)
+        parts = []
+        if d: parts.append(f"{d}д")
+        parts.append(f"{h:02d}:{m2:02d}:{s2:02d}")
+        result["uptime_str"] = " ".join(parts)
 
-    # CPU — try hrProcessorLoad first, then ucd-snmp idle
-    cpu = get("cpuLoad")
-    if isinstance(cpu, int) and 0 <= cpu <= 100:
-        result["cpu_pct"] = cpu
-    else:
-        idle = get("ucpuIdle")
+    # CPU: MikroTik OID first, then HR, then UCD
+    for cpu_oid in (MT_CPU_LOAD, HR_CPU_LOAD):
+        cpu = g(cpu_oid)
+        if isinstance(cpu, int) and 0 <= cpu <= 100:
+            result["cpu_pct"] = cpu
+            if cpu_oid == MT_CPU_LOAD: result["is_mikrotik"] = True
+            break
+    if result["cpu_pct"] is None:
+        idle = g(UCD_CPU_IDLE)
         if isinstance(idle, int) and 0 <= idle <= 100:
             result["cpu_pct"] = 100 - idle
 
-    # RAM
-    mem_total = get("hrMemSize")
-    if isinstance(mem_total, int) and mem_total > 0:
-        result["mem_total_kb"] = mem_total
+    # RAM: MikroTik (bytes) → HR (KB)
+    mt_total = g(MT_MEM_TOTAL); mt_free = g(MT_MEM_FREE)
+    if isinstance(mt_total, int) and mt_total > 0:
+        result["is_mikrotik"] = True
+        result["mem_total_mb"] = round(mt_total / 1048576, 1)
+        if isinstance(mt_free, int) and mt_free >= 0:
+            result["mem_free_mb"]  = round(mt_free / 1048576, 1)
+            result["mem_used_pct"] = round((mt_total - mt_free) / mt_total * 100)
+    else:
+        hr = g(HR_MEM_TOTAL)
+        if isinstance(hr, int) and hr > 0:
+            result["mem_total_mb"] = round(hr / 1024, 1)
 
-    # Batch 2: interface descriptors + counters (4 interfaces)
-    batch2_oids = []
-    for i in range(1, 5):
-        for k in (f"ifDescr{i}", f"ifInOctets{i}", f"ifOutOctets{i}",
-                  f"ifOperStatus{i}", f"ifSpeed{i}"):
-            batch2_oids.append(SNMP_OIDS[k])
+    volt = g(MT_VOLTAGE)
+    if isinstance(volt, int) and volt > 0:
+        result["voltage_v"] = round(volt / 1000, 1); result["is_mikrotik"] = True
+    temp = g(MT_TEMP)
+    if isinstance(temp, int) and temp > 0:
+        result["temp_c"] = round(temp / 10, 1)
 
-    raw2 = _snmp_get_multi(ip, batch2_oids, community)
+    # ── Discover interface indexes: poll ifDescr.1..32 in batches of 10 ──────
+    descr_oids = [f"{IF_DESCR_BASE}.{i}" for i in range(1, 33)]
+    raw_descr = _snmp_batch(ip, descr_oids, community, timeout=3.0, batch_size=10)
 
-    def get2(oid_key):
-        oid = SNMP_OIDS.get(oid_key, oid_key)
-        val = raw2.get(oid)
-        if val is None:
-            for k, v in raw2.items():
-                if k == oid: return _decode_snmp_value(v[0], v[1])
-            return None
-        return _decode_snmp_value(val[0], val[1])
+    valid_idx = []  # [(index, name), ...]
+    for i in range(1, 33):
+        oid = f"{IF_DESCR_BASE}.{i}"
+        v = raw_descr.get(oid)
+        if v and v[0] == 0x04:
+            name = _dec_val(v[0], v[1])
+            if name and isinstance(name, str) and name.strip():
+                valid_idx.append((i, name.strip()))
 
-    for i in range(1, 5):
-        descr      = get2(f"ifDescr{i}")
-        in_oct     = get2(f"ifInOctets{i}")
-        out_oct    = get2(f"ifOutOctets{i}")
-        oper       = get2(f"ifOperStatus{i}")
-        speed      = get2(f"ifSpeed{i}")
-        if descr is None:
-            continue
-        iface = {
-            "index":     i,
-            "name":      descr if isinstance(descr, str) else f"if{i}",
-            "in_octets": in_oct  if isinstance(in_oct, int)  else None,
+    if not valid_idx:
+        return result
+
+    # ── Poll attributes for each valid interface, batch 10 OIDs at a time ────
+    ATTR_BASES = [
+        IF_TYPE_BASE, IF_OPER_BASE, IF_ADMIN_BASE, IF_SPEED_BASE,
+        IF_IN_OCT_BASE, IF_OUT_OCT_BASE,
+        IF_IN_ERR_BASE, IF_OUT_ERR_BASE,
+        IF_IN_UCAST_BASE, IF_OUT_UCAST_BASE,
+    ]
+
+    attr_oids = []
+    for idx, _ in valid_idx:
+        for base in ATTR_BASES:
+            attr_oids.append(f"{base}.{idx}")
+
+    # batch_size=10 means one packet per interface (10 attrs each)
+    raw_attr = _snmp_batch(ip, attr_oids, community, timeout=4.0, batch_size=10)
+
+    IF_TYPE_NAMES = {
+        6: "ethernet", 71: "wifi", 53: "virtual",
+        131: "tunnel", 161: "bridge", 24: "loopback",
+        166: "ppp", 23: "ppp", 1: "other",
+    }
+
+    for idx, name in valid_idx:
+        def ga(base):
+            v = raw_attr.get(f"{base}.{idx}")
+            return _dec_val(v[0], v[1]) if v else None
+
+        iftype_raw = ga(IF_TYPE_BASE)
+        oper       = ga(IF_OPER_BASE)
+        admin      = ga(IF_ADMIN_BASE)
+        speed      = ga(IF_SPEED_BASE)
+        in_oct     = ga(IF_IN_OCT_BASE)
+        out_oct    = ga(IF_OUT_OCT_BASE)
+        in_err     = ga(IF_IN_ERR_BASE)
+        out_err    = ga(IF_OUT_ERR_BASE)
+        in_pkt     = ga(IF_IN_UCAST_BASE)
+        out_pkt    = ga(IF_OUT_UCAST_BASE)
+
+        itype = IF_TYPE_NAMES.get(iftype_raw, "")
+        if not itype:
+            nl = name.lower()
+            if any(x in nl for x in ("wifi","wlan","ath","wireless")): itype = "wifi"
+            elif any(x in nl for x in ("bridge","br-","defconf")):     itype = "bridge"
+            elif nl in ("lo", "loopback") or "loop" in nl:              itype = "loopback"
+            elif any(x in nl for x in ("ppp","gre","ovpn","eoip","vpn","tun")): itype = "tunnel"
+            else: itype = "ethernet"
+
+        result["interfaces"].append({
+            "index":     idx,
+            "name":      name,
+            "type":      itype,
+            "oper":      "up" if oper == 1 else "down",
+            "admin":     "up" if admin == 1 else "down",
+            "speed_bps": speed if isinstance(speed, int) and speed > 0 else None,
+            "in_octets": in_oct  if isinstance(in_oct, int) else None,
             "out_octets":out_oct if isinstance(out_oct, int) else None,
-            "status":    "up" if oper == 1 else ("down" if oper == 2 else "unknown"),
-            "speed_bps": speed if isinstance(speed, int) else None,
-        }
-        result["interfaces"].append(iface)
+            "in_errors": in_err  if isinstance(in_err, int) else None,
+            "out_errors":out_err if isinstance(out_err, int) else None,
+            "in_pkts":   in_pkt  if isinstance(in_pkt, int) else None,
+            "out_pkts":  out_pkt if isinstance(out_pkt, int) else None,
+        })
 
     return result

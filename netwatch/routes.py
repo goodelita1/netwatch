@@ -581,9 +581,100 @@ from .oui import grab_snmp_stats
 @login_required
 def snmp_stats(ip):
     """Poll full SNMP stats for a single device."""
-    import re as _re2
+    import re as _re2, time as _time
     if not _re2.match(r'^[\d.]+$', ip):
         return jsonify({"error": "invalid ip"}), 400
-    data = request.args.get("community", "public")
-    result = grab_snmp_stats(ip, community=data)
+    community = request.args.get("community", "public")
+    result = grab_snmp_stats(ip, community=community)
     return jsonify(result)
+
+@bp.route("/api/snmp/<ip>/traffic")
+@login_required
+def snmp_traffic(ip):
+    """Two SNMP polls 2s apart → compute live bps per interface."""
+    import re as _re2, time as _time
+    from .oui import (IF_IN_OCT_BASE, IF_OUT_OCT_BASE, IF_IN_UCAST_BASE,
+                      IF_OUT_UCAST_BASE, _mk_get_multi, _dec)
+    if not _re2.match(r'^[\d.]+$', ip):
+        return jsonify({"error": "invalid ip"}), 400
+    community = request.args.get("community", "public")
+
+    # Build OID list for up to 32 interfaces
+    MAX_IF = 32
+    oids = []
+    for i in range(1, MAX_IF + 1):
+        for base in (IF_IN_OCT_BASE, IF_OUT_OCT_BASE,
+                     IF_IN_UCAST_BASE, IF_OUT_UCAST_BASE):
+            oids.append(f"{base}.{i}")
+
+    # Poll 1
+    t1 = _time.time()
+    raw1 = _mk_get_multi(ip, oids, community, timeout=2.0)
+    if not raw1:
+        return jsonify({"error": "no response"})
+
+    _time.sleep(2.0)  # interval
+
+    # Poll 2
+    t2 = _time.time()
+    raw2 = _mk_get_multi(ip, oids, community, timeout=2.0)
+    if not raw2:
+        return jsonify({"error": "no response poll2"})
+
+    dt = t2 - t1
+    traffic = {}
+
+    for i in range(1, MAX_IF + 1):
+        in_oid  = f"{IF_IN_OCT_BASE}.{i}"
+        out_oid = f"{IF_OUT_OCT_BASE}.{i}"
+        inp_oid = f"{IF_IN_UCAST_BASE}.{i}"
+        outp_oid= f"{IF_OUT_UCAST_BASE}.{i}"
+
+        def val(raw, oid):
+            v = raw.get(oid)
+            return _dec(v[0], v[1]) if v else None
+
+        in1  = val(raw1, in_oid);  in2  = val(raw2, in_oid)
+        out1 = val(raw1, out_oid); out2 = val(raw2, out_oid)
+        inp1 = val(raw1, inp_oid); inp2 = val(raw2, inp_oid)
+        outp1= val(raw1, outp_oid);outp2= val(raw2, outp_oid)
+
+        if in1 is None and out1 is None:
+            continue
+
+        def bps(a, b):
+            if a is None or b is None: return None
+            diff = b - a
+            if diff < 0: diff += 2**32  # counter wrap
+            return round(diff * 8 / dt)
+
+        def pps(a, b):
+            if a is None or b is None: return None
+            diff = b - a
+            if diff < 0: diff += 2**32
+            return round(diff / dt, 1)
+
+        traffic[i] = {
+            "rx_bps":  bps(in1, in2),
+            "tx_bps":  bps(out1, out2),
+            "rx_pps":  pps(inp1, inp2),
+            "tx_pps":  pps(outp1, outp2),
+        }
+
+    return jsonify({"traffic": traffic, "interval": round(dt, 2)})
+
+@bp.route("/api/snmp/<ip>/debug")
+@login_required
+def snmp_debug(ip):
+    """Raw SNMP debug — show first 20 OIDs returned for ifDescr walk."""
+    import re as _re3
+    if not _re3.match(r'^[\d.]+$', ip):
+        return jsonify({"error": "invalid ip"}), 400
+    from .oui import _snmp_batch, _dec_val, IF_DESCR_BASE
+    community = request.args.get("community", "public")
+    oids = [f"{IF_DESCR_BASE}.{i}" for i in range(1, 21)]
+    raw = _snmp_batch(ip, oids, community, timeout=3.0, batch_size=10)
+    out = {}
+    for oid, (vtype, rawbytes) in raw.items():
+        out[oid] = {"type": hex(vtype), "value": _dec_val(vtype, rawbytes), "hex": rawbytes.hex()}
+    return jsonify({"oids_returned": len(raw), "data": out})
