@@ -13,10 +13,10 @@ _ssl_ctx.check_hostname = False
 _ssl_ctx.verify_mode = ssl.CERT_NONE
 
 def _http(url, method="GET", data=None, headers=None, login="", password="",
-          timeout=8) -> tuple:
+          timeout=8, auth="basic") -> tuple:
     """HTTP/HTTPS request with optional basic auth. Returns (status_code, body)."""
     req = urllib.request.Request(url, method=method)
-    if login:
+    if login and auth == "basic":
         creds = base64.b64encode(f"{login}:{password}".encode()).decode()
         req.add_header("Authorization", f"Basic {creds}")
     if headers:
@@ -25,6 +25,15 @@ def _http(url, method="GET", data=None, headers=None, login="", password="",
         req.data = data.encode() if isinstance(data, str) else data
         req.add_header("Content-Type", "application/json")
     try:
+        if login and auth == "digest":
+            pwd_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+            pwd_mgr.add_password(None, url, login, password)
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPDigestAuthHandler(pwd_mgr),
+                urllib.request.HTTPSHandler(context=_ssl_ctx),
+            )
+            with opener.open(req, timeout=timeout) as r:
+                return r.status, r.read().decode(errors="ignore")
         with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx) as r:
             return r.status, r.read().decode(errors="ignore")
     except urllib.error.HTTPError as e:
@@ -102,7 +111,7 @@ def _reboot_dahua(ip, login, password) -> dict:
     """Dahua HTTP API reboot."""
     for scheme in ("http", "https"):
         url = f"{scheme}://{ip}/cgi-bin/magicBox.cgi?action=reboot"
-        st, body = _http(url, login=login, password=password)
+        st, body = _http(url, login=login, password=password, auth="digest")
         if st == 200 and ("OK" in body or "ok" in body.lower()):
             return {"ok": True, "method": f"Dahua HTTP CGI ({scheme})", "detail": "Команда отправлена"}
     return {"ok": False, "method": "Dahua", "detail": "Ошибка — проверьте учётные данные"}
