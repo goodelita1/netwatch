@@ -14,7 +14,7 @@ function switchTab(name,el){
   el.classList.add('active');
   document.getElementById('tab-'+name).classList.add('active');
   if(name==='subnets'||name==='discovery') renderSubnetUI();
-  if(name==='events') fetchEvents();
+  if(name==='events'){ fetchEvents(); _refreshEvTestSelect(); }
   if(name==='settings') loadTg();
 }
 
@@ -24,7 +24,7 @@ function startAutoCountdown(){
   if(autoTimer) clearInterval(autoTimer);
   autoTimer=setInterval(()=>{
     autoCountdown--;
-    document.getElementById('autoBadge').textContent=`⏱ авто-пинг ${autoCountdown}с`;
+    document.getElementById('autoBadgeText').textContent=`⏱ авто-пинг ${autoCountdown}с`;
     if(autoCountdown<=0){
       autoCountdown=60;
       fetchDevices(); // refresh after server auto-ping fires
@@ -919,75 +919,131 @@ async function fetchAutoScan(){
   }catch(e){}
 }
 
+let _autoscanOpen = false;
+
+function toggleAutoscanDropdown(){
+  _autoscanOpen = !_autoscanOpen;
+  const dd  = document.getElementById('autoscanDropdown');
+  const arr = document.getElementById('autoBadgeArrow');
+  dd.style.display  = _autoscanOpen ? 'block' : 'none';
+  if(arr) arr.style.transform = _autoscanOpen ? 'rotate(180deg)' : '';
+  // Close on outside click
+  if(_autoscanOpen){
+    setTimeout(()=>{
+      document.addEventListener('click', _closeAutoscanOutside, {once:true});
+    }, 50);
+  }
+}
+
+function _closeAutoscanOutside(e){
+  const dd = document.getElementById('autoscanDropdown');
+  const btn = document.getElementById('autoBadge');
+  if(dd && !dd.contains(e.target) && btn && !btn.contains(e.target)){
+    _autoscanOpen = false;
+    dd.style.display = 'none';
+    const arr = document.getElementById('autoBadgeArrow');
+    if(arr) arr.style.transform = '';
+  } else if(_autoscanOpen){
+    // re-attach if click was inside dropdown
+    setTimeout(()=>{
+      document.addEventListener('click', _closeAutoscanOutside, {once:true});
+    }, 50);
+  }
+}
+
 function renderAutoScan(d){
-  const disc=d.discovery, sn=d.subnet;
-  const panel=document.getElementById('autoscanPanel');
+  const disc = d.discovery, sn = d.subnet;
+  const totalNew = (disc.new_count||0) + (sn.new_count||0);
 
-  // Timers
-  const discPulse=document.getElementById('discPulse');
-  const discLbl=document.getElementById('discTimerLbl');
-  if(disc.running){
-    discPulse.classList.remove('idle');
-    discLbl.textContent='Хосты: сканирование...';
-  } else if(disc.last_run){
-    discPulse.classList.add('idle');
-    const el=Math.round(Date.now()/1000-disc.last_run);
-    discLbl.textContent='Хосты: '+fmtAgo(disc.last_run)+' · след. '+fmtCountdown(300,el);
-  } else {
-    discPulse.classList.add('idle');
-    discLbl.textContent='Хосты: ожидание запуска...';
+  // ── Badge counter ────────────────────────────────────────────────────────
+  const cnt = document.getElementById('autoBadgeCount');
+  const btn = document.getElementById('autoBadge');
+  if(cnt){
+    if(totalNew > 0){
+      cnt.style.display = 'inline';
+      cnt.textContent   = totalNew;
+      if(btn) btn.style.borderColor = '#ffb30060';
+    } else {
+      cnt.style.display = 'none';
+      if(btn) btn.style.borderColor = '#00e67630';
+    }
   }
 
-  const snPulse=document.getElementById('snPulse');
-  const snLbl=document.getElementById('snTimerLbl');
-  if(sn.running){
-    snPulse.classList.remove('idle');
-    snLbl.textContent='Подсети: сканирование...';
-  } else if(sn.last_run){
-    snPulse.classList.add('idle');
-    const el=Math.round(Date.now()/1000-sn.last_run);
-    snLbl.textContent='Подсети: '+fmtAgo(sn.last_run)+' · след. '+fmtCountdown(900,el);
-  } else {
-    snPulse.classList.add('idle');
-    snLbl.textContent='Подсети: ожидание запуска...';
+  // ── Timers ────────────────────────────────────────────────────────────────
+  const discPulse = document.getElementById('discPulse');
+  const discLbl   = document.getElementById('discTimerLbl');
+  if(discPulse && discLbl){
+    if(disc.running){
+      discPulse.style.background   = 'var(--green)';
+      discPulse.style.animation    = 'blink 1s infinite';
+      discLbl.textContent = 'сканирование...';
+    } else if(disc.last_run){
+      discPulse.style.background   = 'var(--muted)';
+      discPulse.style.animation    = 'none';
+      const el = Math.round(Date.now()/1000 - disc.last_run);
+      discLbl.textContent = fmtAgo(disc.last_run) + ' · ' + fmtCountdown(300, el);
+    } else {
+      discPulse.style.background = 'var(--muted)';
+      discLbl.textContent = 'ожидание запуска...';
+    }
   }
 
-  panel.classList.toggle('has-new',(disc.new_count>0)||(sn.new_count>0));
-
-  // Unregistered hosts
-  const discEl=document.getElementById('autoDiscList');
-  if(disc.running){
-    discEl.innerHTML='<div class="autoscan-empty">⟳ Сканирование...</div>';
-  } else if(!disc.last_run){
-    discEl.innerHTML='<div class="autoscan-empty">Ожидание первого скана (~90с после старта)</div>';
-  } else if(disc.new_count===0){
-    discEl.innerHTML='<div class="autoscan-empty" style="color:var(--green)">✅ Все хосты зарегистрированы</div>';
-  } else {
-    discEl.innerHTML=disc.new_devices.map(ip=>`
-      <div class="autoscan-ip">
-        <div class="dot" style="background:var(--yel);box-shadow:0 0 6px var(--yel);width:8px;height:8px;border-radius:50%;flex-shrink:0"></div>
-        <span class="ip-txt">${ip}</span>
-        <span class="sn-txt">${ip.split('.').slice(0,3).join('.')}.0/24</span>
-        <button class="btn btn-yel" style="padding:2px 8px;font-size:10px" onclick="openAddModal('${ip}')">+ Добавить</button>
-      </div>`).join('');
+  const snPulse = document.getElementById('snPulse');
+  const snLbl   = document.getElementById('snTimerLbl');
+  if(snPulse && snLbl){
+    if(sn.running){
+      snPulse.style.background  = 'var(--pur)';
+      snPulse.style.animation   = 'blink 1s infinite';
+      snLbl.textContent = 'сканирование...';
+    } else if(sn.last_run){
+      snPulse.style.background  = 'var(--muted)';
+      snPulse.style.animation   = 'none';
+      const el = Math.round(Date.now()/1000 - sn.last_run);
+      snLbl.textContent = fmtAgo(sn.last_run) + ' · ' + fmtCountdown(900, el);
+    } else {
+      snPulse.style.background = 'var(--muted)';
+      snLbl.textContent = 'ожидание запуска...';
+    }
   }
 
-  // New subnets
-  const snEl=document.getElementById('autoSnList');
-  if(sn.running){
-    snEl.innerHTML='<div class="autoscan-empty">⟳ Сканирование...</div>';
-  } else if(!sn.last_run){
-    snEl.innerHTML='<div class="autoscan-empty">Ожидание первого скана (~3м после старта)</div>';
-  } else if(sn.new_count===0){
-    snEl.innerHTML='<div class="autoscan-empty" style="color:var(--green)">✅ Новых подсетей не найдено</div>';
-  } else {
-    snEl.innerHTML=sn.new_subnets.map(x=>`
-      <div class="autoscan-ip">
-        <div style="background:var(--pur);box-shadow:0 0 6px var(--pur);width:8px;height:8px;border-radius:50%;flex-shrink:0"></div>
-        <span class="ip-txt">192.168.${x}.0/24</span>
-        <span class="sn-txt">шлюз .${x}.1</span>
-        <button class="btn btn-yel" style="padding:2px 8px;font-size:10px" onclick="addAutoSubnet(${x})">+ Реестр</button>
-      </div>`).join('');
+  // ── Незарег. хосты ────────────────────────────────────────────────────────
+  const discEl = document.getElementById('autoDiscList');
+  if(discEl){
+    if(disc.running){
+      discEl.innerHTML = '<div style="font-size:11px;color:var(--muted)">⟳ сканирование...</div>';
+    } else if(!disc.last_run){
+      discEl.innerHTML = '<div style="font-size:11px;color:var(--muted)">~90с после старта</div>';
+    } else if(!disc.new_count){
+      discEl.innerHTML = '<div style="font-size:11px;color:var(--green)">✅ все зарег.</div>';
+    } else {
+      discEl.innerHTML = disc.new_devices.map(ip => `
+        <div style="display:flex;align-items:center;gap:5px;padding:4px 0;border-bottom:1px solid var(--bd)">
+          <div style="width:6px;height:6px;border-radius:50%;background:var(--yel);flex-shrink:0"></div>
+          <span style="font-size:11px;font-family:'JetBrains Mono',monospace;flex:1">${ip}</span>
+          <button class="btn btn-yel" style="padding:1px 7px;font-size:9px"
+            onclick="openAddModal('${ip}');toggleAutoscanDropdown()">+ В базу</button>
+        </div>`).join('');
+    }
+  }
+
+  // ── Новые подсети ─────────────────────────────────────────────────────────
+  const snEl = document.getElementById('autoSnList');
+  if(snEl){
+    if(sn.running){
+      snEl.innerHTML = '<div style="font-size:11px;color:var(--muted)">⟳ сканирование...</div>';
+    } else if(!sn.last_run){
+      snEl.innerHTML = '<div style="font-size:11px;color:var(--muted)">~3м после старта</div>';
+    } else if(!sn.new_count){
+      snEl.innerHTML = '<div style="font-size:11px;color:var(--green)">✅ нет новых</div>';
+    } else {
+      snEl.innerHTML = sn.new_subnets.map(x => `
+        <div style="display:flex;align-items:center;gap:5px;padding:4px 0;border-bottom:1px solid var(--bd)">
+          <div style="width:6px;height:6px;border-radius:50%;background:var(--pur);flex-shrink:0"></div>
+          <span style="font-size:11px;font-family:'JetBrains Mono',monospace;flex:1">192.168.${x}.0/24</span>
+          <button class="btn btn-yel" style="padding:1px 7px;font-size:9px"
+            onclick="addAutoSubnet(${x})">+ Реестр</button>
+        </div>`).join('');
+    }
   }
 }
 
@@ -1011,6 +1067,47 @@ async function fetchEvents(){
     allEvents=await r.json();
     renderEvents();
   }catch(e){}
+  // Also refresh device list in test select
+  _refreshEvTestSelect();
+}
+
+function _refreshEvTestSelect(){
+  const sel=document.getElementById('evTestIp');
+  if(!sel||!allDevices.length) return;
+  const cur=sel.value;
+  sel.innerHTML='<option value="">— выберите устройство —</option>'+
+    allDevices.map(d=>{
+      const status=d.online===true?'🟢':d.online===false?'🔴':'⚪';
+      return `<option value="${d.ip}">${status} ${d.name} (${d.ip})</option>`;
+    }).join('');
+  if(cur) sel.value=cur;
+}
+
+async function testEvent(kind){
+  const ip=document.getElementById('evTestIp').value;
+  const st=document.getElementById('evTestStatus');
+  if(!ip){st.textContent='⚠️ Выберите устройство';return;}
+  st.textContent='⟳ Отправка...';
+  try{
+    const r=await fetch('/api/test/event',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ip, kind})
+    });
+    const d=await r.json();
+    if(d.ok){
+      st.style.color='var(--green)';
+      st.textContent=`✅ Событие "${kind}" для ${ip} создано`;
+      setTimeout(()=>fetchEvents(), 500);  // refresh list
+    } else {
+      st.style.color='var(--red)';
+      st.textContent='❌ '+(d.error||'Ошибка');
+    }
+  }catch(e){
+    st.style.color='var(--red)';
+    st.textContent='❌ '+e;
+  }
+  setTimeout(()=>{st.textContent='';st.style.color='';},5000);
 }
 
 function setEvFilter(f,el){
@@ -1197,7 +1294,7 @@ async function doLogout(){
   setInterval(fetchDevices,15000);
   setInterval(fetchAutoScan,10000);
   setInterval(refreshAllHistory,60000);  // refresh sparklines every 60s
-  setInterval(fetchEvents,30000);        // refresh events every 30s
+  setInterval(fetchEvents,10000);        // refresh events every 10s
 })();
 // ══════════════════════════════════════════════════════════════════════════════
 // TRACEROUTE

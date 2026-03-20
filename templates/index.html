@@ -21,7 +21,51 @@
   </div>
   <div class="hdr-r">
     <span class="last-scan" id="lastScan">Ожидание...</span>
-    <span class="auto-badge" id="autoBadge">⏱ авто-пинг 60с</span>
+    <div style="position:relative;display:inline-block">
+      <button id="autoBadge" onclick="toggleAutoscanDropdown()" style="background:var(--gd);color:var(--green);border:1px solid #00e67630;padding:4px 10px;border-radius:5px;font-family:inherit;font-size:10px;cursor:pointer;display:flex;align-items:center;gap:5px">
+        <span id="autoBadgeText">⏱ авто-пинг 60с</span>
+        <span id="autoBadgeCount" style="display:none;background:var(--yel);color:#000;border-radius:10px;padding:1px 6px;font-size:9px;font-weight:700"></span>
+        <span id="autoBadgeArrow" style="font-size:8px;transition:transform .2s">▼</span>
+      </button>
+      <!-- Dropdown panel -->
+      <div id="autoscanDropdown" style="display:none;position:absolute;top:calc(100% + 6px);right:0;width:420px;max-width:90vw;background:var(--sf);border:1px solid var(--bd);border-radius:12px;box-shadow:0 8px 32px #00000060;z-index:500;overflow:hidden">
+        <div style="padding:12px 14px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between">
+          <div>
+            <div style="font-size:13px;font-weight:700">🤖 Авто-сканирование</div>
+            <div style="font-size:10px;color:var(--muted);margin-top:2px">хосты каждые 5 мин · подсети каждые 15 мин</div>
+          </div>
+          <button onclick="toggleAutoscanDropdown()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:0 4px;line-height:1">✕</button>
+        </div>
+        <!-- Timers row -->
+        <div style="display:flex;gap:0;border-bottom:1px solid var(--bd)">
+          <div style="flex:1;padding:8px 14px;border-right:1px solid var(--bd)">
+            <div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">
+              <div class="pulse idle" id="discPulse" style="width:6px;height:6px;border-radius:50%;background:var(--muted)"></div>
+              <span style="font-size:10px;font-weight:600;color:var(--text)">Хосты</span>
+            </div>
+            <div id="discTimerLbl" style="font-size:9px;color:var(--muted)">ожидание...</div>
+          </div>
+          <div style="flex:1;padding:8px 14px">
+            <div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">
+              <div class="pulse idle" id="snPulse" style="width:6px;height:6px;border-radius:50%;background:var(--muted)"></div>
+              <span style="font-size:10px;font-weight:600;color:var(--text)">Подсети</span>
+            </div>
+            <div id="snTimerLbl" style="font-size:9px;color:var(--muted)">ожидание...</div>
+          </div>
+        </div>
+        <!-- Content: two columns -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;max-height:320px;overflow-y:auto">
+          <div style="padding:10px 14px;border-right:1px solid var(--bd)">
+            <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">🔴 Незарег. хосты</div>
+            <div id="autoDiscList"><div style="font-size:11px;color:var(--muted)">Ожидание...</div></div>
+          </div>
+          <div style="padding:10px 14px">
+            <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">🛰 Новые подсети</div>
+            <div id="autoSnList"><div style="font-size:11px;color:var(--muted)">Ожидание...</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
     <button class="btn btn-g" id="scanBtn" onclick="triggerScan()">▶ Пинг</button>
     <button class="btn btn-cyan" id="deepBtn" onclick="triggerDeepScan()">🔬 Глубокий скан</button>
     <button class="btn btn-acc" onclick="openAddModal()">+ Устройство</button>
@@ -52,27 +96,6 @@
   </div>
 
   <!-- Auto-scan results panel -->
-  <div class="autoscan-panel" id="autoscanPanel">
-    <div class="autoscan-hdr">
-      <h3>🤖 Авто-сканирование сети
-        <span style="font-size:10px;font-weight:400;color:var(--muted)">(хосты каждые 5 мин · подсети каждые 15 мин)</span>
-      </h3>
-      <div class="autoscan-timers">
-        <div class="autoscan-timer"><div class="pulse idle" id="discPulse"></div><span id="discTimerLbl">Хосты: ожидание...</span></div>
-        <div class="autoscan-timer"><div class="pulse idle" id="snPulse"></div><span id="snTimerLbl">Подсети: ожидание...</span></div>
-      </div>
-    </div>
-    <div class="autoscan-body">
-      <div>
-        <h4>🔴 Незарегистрированные хосты</h4>
-        <div id="autoDiscList"><div class="autoscan-empty">Ожидание первого скана (~90с после старта)</div></div>
-      </div>
-      <div>
-        <h4>🛰 Новые подсети</h4>
-        <div id="autoSnList"><div class="autoscan-empty">Ожидание первого скана (~3м после старта)</div></div>
-      </div>
-    </div>
-  </div>
 
   <div class="stats">
     <div class="sc"><div class="sc-label">Всего</div><div class="sc-val t" id="sTotal">—</div></div>
@@ -155,6 +178,18 @@
       <button class="fbtn" onclick="setEvFilter('reboot',this)">🔄 Ребут</button>
       <button class="fbtn" onclick="setEvFilter('new_host',this)">🆕 Новые</button>
     </div>
+
+    <!-- Test panel -->
+    <div id="evTestPanel" style="margin-bottom:12px;padding:10px 13px;background:var(--sf2);border:1px solid var(--bd);border-radius:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:10px;color:var(--muted);font-weight:700">🧪 Тест событий:</span>
+      <select id="evTestIp" style="background:var(--sf);border:1px solid var(--bd);color:var(--text);padding:4px 8px;border-radius:5px;font-family:inherit;font-size:11px;max-width:220px">
+        <option value="">— выберите устройство —</option>
+      </select>
+      <button class="btn-reboot" style="font-size:10px;padding:4px 10px;border-radius:5px;border:1px solid #ff3d5760;cursor:pointer;font-family:inherit;font-weight:700;color:var(--red);background:var(--rd)" onclick="testEvent('down')">⬇ Симулировать DOWN</button>
+      <button class="btn-ping"   style="font-size:10px;padding:4px 10px;border-radius:5px;border:1px solid #00d4ff40;cursor:pointer;font-family:inherit;font-weight:700;color:var(--cyan);background:var(--cyd)" onclick="testEvent('up')">⬆ Симулировать UP</button>
+      <span id="evTestStatus" style="font-size:10px;color:var(--muted)"></span>
+    </div>
+
     <div id="evList"><div class="ev-empty">Загрузка...</div></div>
   </div>
 </div>
@@ -502,7 +537,7 @@
 
 <!-- SNMP Stats Modal -->
 <div class="modal-ov" id="snmpModal">
-  <div class="modal" style="max-width:560px;width:95vw">
+  <div class="modal" style="max-width:900px;width:95vw;max-height:90vh;overflow-y:auto">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
       <h2 style="font-size:15px" id="snmpModalTitle">SNMP статистика</h2>
       <button class="btn btn-ghost" style="padding:4px 10px;font-size:12px" onclick="closeSnmpModal()">✕</button>

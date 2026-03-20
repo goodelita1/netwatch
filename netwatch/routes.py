@@ -121,13 +121,40 @@ def scan_single_host(ip):
 @bp.route("/api/ping/<ip>")
 @login_required
 def ping_single(ip):
-    """Single device quick ping — updates cache AND ping history for sparklines."""
-    from .events import record_ping
+    """Single device quick ping — updates cache, history AND fires events."""
+    from .monitor import _on_ping_result
     alive, ms = ping_sync(ip)
-    status_cache[ip]  = alive
-    latency_cache[ip] = ms
-    record_ping(ip, alive, ms)   # <-- keeps sparkline history in sync
+    # Load device map so _on_ping_result can resolve name
+    devices   = load_devices()
+    dbip      = {d["ip"]: d for d in devices}
+    # This updates cache + history + fires down/up events
+    _on_ping_result(ip, alive, ms, dbip)
     return jsonify({"ip": ip, "alive": alive, "latency": ms})
+
+@bp.route("/api/test/event", methods=["POST"])
+@login_required
+def test_event():
+    """
+    Dev helper — manually inject a down/up event for testing.
+    POST JSON: {"ip": "x.x.x.x", "kind": "down"}   kind = down | up
+    """
+    from .monitor import _on_ping_result, status_cache as sc
+    data = request.json or {}
+    ip   = data.get("ip", "")
+    kind = data.get("kind", "down")   # "down" or "up"
+    if not ip:
+        return jsonify({"error": "ip required"}), 400
+    devices = load_devices()
+    dbip    = {d["ip"]: d for d in devices}
+    if kind == "down":
+        # Force prev=True so event fires
+        sc[ip] = True
+        _on_ping_result(ip, False, None, dbip)
+    else:
+        # Force prev=False so event fires
+        sc[ip] = False
+        _on_ping_result(ip, True, 1.0, dbip)
+    return jsonify({"ok": True, "injected": kind, "ip": ip})
 
 @bp.route("/api/reboot/<int:did>", methods=["POST"])
 @login_required
