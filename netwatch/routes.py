@@ -14,10 +14,29 @@ from .monitor  import (status_cache, latency_cache, mac_cache, vendor_cache,
                         disc, run_discovery, sn_scan, run_subnet_scan)
 from .reboot   import reboot_device
 from .scanner  import ping_sync
-from .events   import (load_events, save_events, add_event,
+from .events   import (load_events, save_events, add_event, add_audit,
+                       load_audit, record_ping, load_ping_history_from_db,
+                       ping_history, _ph_lock,
                        load_tg, save_tg, tg_send, tg_send_to,
-                       ping_history, _ph_lock)
+                       load_discord, save_discord, discord_send_test,
+                       load_email_cfg, save_email_cfg, email_send_test,
+                       load_webhook_cfg, save_webhook_cfg, webhook_send_test)
 from .auth     import login_required, check_credentials, change_credentials, get_username
+
+import collections as _coll, time as _time_mod
+_login_attempts: dict = {}   # ip → deque[ts]
+_LOGIN_MAX    = 5
+_LOGIN_WINDOW = 300   # 5 min
+_LOGIN_BLOCK  = 900   # 15 min
+
+def _check_rate_limit(ip: str) -> bool:
+    now = _time_mod.time()
+    q   = _login_attempts.setdefault(ip, _coll.deque())
+    while q and now - q[0] > _LOGIN_BLOCK: q.popleft()
+    if sum(1 for t in q if now - t < _LOGIN_WINDOW) >= _LOGIN_MAX:
+        return False
+    q.append(now)
+    return True
 
 bp = Blueprint("api", __name__)
 
@@ -30,13 +49,19 @@ def login_page():
 
 @bp.route("/login", methods=["POST"])
 def login_post():
-    data = request.get_json(silent=True) or {}
-    username = data.get("username", "").strip()
-    password = data.get("password", "")
+    client_ip = request.remote_addr or "?"
+    data      = request.get_json(silent=True) or {}
+    username  = data.get("username", "").strip()
+    password  = data.get("password", "")
+    if not _check_rate_limit(client_ip):
+        add_audit("login_blocked", username, client_ip, "rate limit")
+        return jsonify({"ok": False, "error": "Слишком много попыток. Подождите 15 минут."}), 429
     if check_credentials(username, password):
         session["logged_in"] = True
         session["username"]  = username
+        add_audit("login_ok", username, client_ip)
         return jsonify({"ok": True})
+    add_audit("login_fail", username, client_ip, "bad credentials")
     return jsonify({"ok": False, "error": "Неверный логин или пароль"}), 401
 
 @bp.route("/logout", methods=["POST"])
@@ -171,6 +196,8 @@ def reboot_device_route(did):
     if result.get("ok"):
         add_event("reboot", device["ip"], device.get("name", device["ip"]),
                   f"Перезагрузка: {result.get('method','')}")
+        add_audit("reboot", session.get("username","?"), request.remote_addr or "",
+                  f"{device.get('name', device['ip'])} ({device['ip']})")
     return jsonify(result)
 
 @bp.route("/api/events")
@@ -303,6 +330,142 @@ def get_dashboard():
 
     return jsonify(result)
 
+
+# ── Discord ──────────────────────────────────────────────────────────────────
+@bp.route("/api/discord", methods=["GET"])
+@login_required
+def get_discord():
+    cfg = load_discord(); cfg.pop("webhook_url", None); return jsonify(cfg)
+
+@bp.route("/api/discord", methods=["POST"])
+@login_required
+def set_discord():
+    data = request.json or {}
+    cfg  = load_discord()
+    for k in ("webhook_url","enabled","notify_power","notify_device","notify_new_host"):
+        if k in data: cfg[k] = data[k]
+    save_discord(cfg)
+    return jsonify({"ok": True})
+
+@bp.route("/api/discord/test", methods=["POST"])
+@login_required
+def test_discord():
+    ok = discord_send_test()
+    return jsonify({"ok": ok})
+
+# ── Email ─────────────────────────────────────────────────────────────────────
+@bp.route("/api/email", methods=["GET"])
+@login_required
+def get_email():
+    cfg = load_email_cfg()
+    safe = dict(cfg); safe["smtp_password"] = "••••" if safe.get("smtp_password") else ""
+    return jsonify(safe)
+
+@bp.route("/api/email", methods=["POST"])
+@login_required
+def set_email():
+    data = request.json or {}
+    cfg  = load_email_cfg()
+    for k in ("smtp_host","smtp_port","smtp_user","smtp_password","smtp_from",
+              "smtp_to","use_tls","enabled","notify_power","notify_device","notify_new_host"):
+        if k in data: cfg[k] = data[k]
+    # Don't overwrite password if placeholder sent
+    if data.get("smtp_password") == "••••":
+        data.pop("smtp_password", None)
+    save_email_cfg(cfg)
+    return jsonify({"ok": True})
+
+@bp.route("/api/email/test", methods=["POST"])
+@login_required
+def test_email():
+    ok = email_send_test()
+    return jsonify({"ok": ok})
+
+# ── Generic Webhook ───────────────────────────────────────────────────────────
+@bp.route("/api/webhook", methods=["GET"])
+@login_required
+def get_webhook():
+    return jsonify(load_webhook_cfg())
+
+@bp.route("/api/webhook", methods=["POST"])
+@login_required
+def set_webhook():
+    data = request.json or {}
+    cfg  = load_webhook_cfg()
+    for k in ("url","enabled","notify_power","notify_device","notify_new_host"):
+        if k in data: cfg[k] = data[k]
+    save_webhook_cfg(cfg)
+    return jsonify({"ok": True})
+
+@bp.route("/api/webhook/test", methods=["POST"])
+@login_required
+def test_webhook():
+    ok = webhook_send_test()
+    return jsonify({"ok": ok})
+
+# ── Audit log ─────────────────────────────────────────────────────────────────
+@bp.route("/api/audit")
+@login_required
+def get_audit():
+    limit = int(request.args.get("limit", 200))
+    return jsonify(load_audit(limit))
+
+# ── CSV export ────────────────────────────────────────────────────────────────
+@bp.route("/api/export/devices.csv")
+@login_required
+def export_devices_csv():
+    import csv, io
+    devices = load_devices()
+    out = io.StringIO()
+    w = csv.DictWriter(out, fieldnames=[
+        "id","ip","name","location","type","mac","vendor","model"
+    ])
+    w.writeheader()
+    for d in devices:
+        w.writerow({k: d.get(k,"") for k in w.fieldnames})
+    from flask import Response
+    return Response(
+        "﻿" + out.getvalue(),   # BOM for Excel
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=devices.csv"}
+    )
+
+@bp.route("/api/export/events.csv")
+@login_required
+def export_events_csv():
+    import csv, io
+    from datetime import datetime
+    evs = load_events(limit=5000)
+    out = io.StringIO()
+    w = csv.DictWriter(out, fieldnames=["datetime","kind","ip","name","detail"])
+    w.writeheader()
+    for e in reversed(evs):
+        e2 = dict(e)
+        e2["datetime"] = datetime.fromtimestamp(e2.pop("ts")).strftime("%Y-%m-%d %H:%M:%S")
+        w.writerow({k: e2.get(k,"") for k in w.fieldnames})
+    from flask import Response
+    return Response(
+        "﻿" + out.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=events.csv"}
+    )
+
+# ── Backup ────────────────────────────────────────────────────────────────────
+@bp.route("/api/backup", methods=["POST"])
+@login_required
+def create_backup():
+    """Create a manual backup zip of netwatch.db → backups/YYYY-MM-DD_HH-MM.zip"""
+    from .backup import do_backup
+    path = do_backup()
+    if path:
+        return jsonify({"ok": True, "path": path})
+    return jsonify({"ok": False, "error": "backup failed"}), 500
+
+@bp.route("/api/backup/list")
+@login_required
+def list_backups():
+    from .backup import list_backups as _lb
+    return jsonify(_lb())
 
 @bp.route("/api/telegram", methods=["GET"])
 @login_required

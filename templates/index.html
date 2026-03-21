@@ -316,6 +316,159 @@
     </div>
   </div>
 
+  <!-- Discord -->
+  <div class="panel">
+    <div class="panel-hdr">
+      <h3>🎮 Discord уведомления</h3>
+      <span id="discordStatus" class="panel-sub"></span>
+    </div>
+    <div class="tg-form">
+      <div class="tg-row" style="grid-column:1/-1">
+        <label class="tg-label">Webhook URL</label>
+        <input class="tg-inp" id="discordUrl" type="password" placeholder="https://discord.com/api/webhooks/...">
+      </div>
+      <div class="tg-row">
+        <label class="tg-label">Уведомлять о:</label>
+        <div style="display:flex;flex-direction:column;gap:7px;margin-top:4px">
+          <label class="tg-toggle"><input type="checkbox" id="discordPower" checked> ⚡ Свет</label>
+          <label class="tg-toggle"><input type="checkbox" id="discordDevice" checked> 🔴 Устройство недоступно</label>
+          <label class="tg-toggle"><input type="checkbox" id="discordHost" checked> 🆕 Новый хост</label>
+        </div>
+      </div>
+      <div class="tg-row" style="grid-column:1/-1">
+        <label class="tg-toggle" style="font-size:13px"><input type="checkbox" id="discordEnabled"> <b>Включить</b></label>
+      </div>
+    </div>
+    <div style="display:flex;gap:9px;margin-top:14px;flex-wrap:wrap">
+      <button class="btn btn-acc" onclick="saveDiscord()">💾 Сохранить</button>
+      <button class="btn btn-ghost" style="font-size:11px" onclick="testDiscord()">📨 Тест</button>
+      <span id="discordTestStatus" style="font-size:11px;color:var(--muted)"></span>
+    </div>
+  </div>
+
+  <!-- Email -->
+  <div class="panel">
+    <div class="panel-hdr">
+      <h3>📧 Email уведомления</h3>
+      <span id="emailStatus" class="panel-sub"></span>
+    </div>
+    <div class="tg-form">
+      <div class="tg-row">
+        <label class="tg-label">SMTP сервер</label>
+        <input class="tg-inp" id="smtpHost" placeholder="smtp.gmail.com">
+      </div>
+      <div class="tg-row">
+        <label class="tg-label">Порт</label>
+        <input class="tg-inp" id="smtpPort" type="number" value="587" style="width:80px">
+      </div>
+      <div class="tg-row">
+        <label class="tg-label">Логин</label>
+        <input class="tg-inp" id="smtpUser" placeholder="user@gmail.com" autocomplete="off">
+      </div>
+      <div class="tg-row">
+        <label class="tg-label">Пароль / App password</label>
+        <input class="tg-inp" id="smtpPass" type="password" autocomplete="new-password">
+      </div>
+      <div class="tg-row">
+        <label class="tg-label">От кого</label>
+        <input class="tg-inp" id="smtpFrom" placeholder="netwatch@gmail.com">
+      </div>
+      <div class="tg-row">
+        <label class="tg-label">Кому</label>
+        <input class="tg-inp" id="smtpTo" placeholder="admin@example.com">
+      </div>
+      <div class="tg-row">
+        <label class="tg-toggle"><input type="checkbox" id="smtpTls" checked> STARTTLS</label>
+      </div>
+      <div class="tg-row" style="grid-column:1/-1">
+        <label class="tg-toggle" style="font-size:13px"><input type="checkbox" id="emailEnabled"> <b>Включить</b></label>
+      </div>
+    </div>
+    <div style="display:flex;gap:9px;margin-top:14px;flex-wrap:wrap">
+      <button class="btn btn-acc" onclick="saveEmail()">💾 Сохранить</button>
+      <button class="btn btn-ghost" style="font-size:11px" onclick="testEmail()">📨 Тест</button>
+      <span id="emailTestStatus" style="font-size:11px;color:var(--muted)"></span>
+    </div>
+    <div class="hint" style="margin-top:12px;line-height:1.9">
+      <b>Gmail:</b> Включить двухэтапную аутентификацию → Пароли приложений → создать App password.<br>
+      <b>Порт 587</b> = STARTTLS (рекомендуется) · <b>Порт 465</b> = SSL (отключите STARTTLS)
+    </div>
+  </div>
+
+  <!-- Webhook -->
+  <div class="panel">
+    <div class="panel-hdr">
+      <h3>🔗 Webhook уведомления</h3>
+      <span class="panel-sub">n8n · Zapier · Home Assistant · любой сервис</span>
+    </div>
+    <div class="tg-form">
+      <div class="tg-row" style="grid-column:1/-1">
+        <label class="tg-label">URL</label>
+        <input class="tg-inp" id="webhookUrl" placeholder="https://n8n.example.com/webhook/...">
+      </div>
+      <div class="tg-row">
+        <label class="tg-label">Уведомлять о:</label>
+        <div style="display:flex;flex-direction:column;gap:7px;margin-top:4px">
+          <label class="tg-toggle"><input type="checkbox" id="webhookPower" checked> ⚡ Свет</label>
+          <label class="tg-toggle"><input type="checkbox" id="webhookDevice" checked> 🔴 Устройство</label>
+          <label class="tg-toggle"><input type="checkbox" id="webhookHost" checked> 🆕 Новый хост</label>
+        </div>
+      </div>
+      <div class="tg-row" style="grid-column:1/-1">
+        <label class="tg-toggle" style="font-size:13px"><input type="checkbox" id="webhookEnabled"> <b>Включить</b></label>
+      </div>
+    </div>
+    <div style="display:flex;gap:9px;margin-top:14px;flex-wrap:wrap">
+      <button class="btn btn-acc" onclick="saveWebhook()">💾 Сохранить</button>
+      <button class="btn btn-ghost" style="font-size:11px" onclick="testWebhook()">📨 Тест</button>
+      <span id="webhookTestStatus" style="font-size:11px;color:var(--muted)"></span>
+    </div>
+    <div class="hint" style="margin-top:10px">POST JSON: <code>{"source","kind","ip","name","detail","ts"}</code></div>
+  </div>
+
+  <!-- Sound -->
+  <div class="panel">
+    <div class="panel-hdr"><h3>🔔 Звуковые уведомления</h3></div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <label class="tg-toggle" style="font-size:13px"><input type="checkbox" id="soundEnabled" onchange="saveSoundSettings()"> <b>Звук при падении устройства</b></label>
+      <label class="tg-toggle"><input type="checkbox" id="soundUp" onchange="saveSoundSettings()"> 🟢 Звук при восстановлении</label>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span class="tg-label">Громкость:</span>
+        <input type="range" id="soundVolume" min="0" max="100" value="50" style="width:120px" oninput="saveSoundSettings();document.getElementById('soundVolLbl').textContent=this.value+'%'">
+        <span id="soundVolLbl" style="font-size:11px;color:var(--muted)">50%</span>
+        <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="playTestSound('down')">▶ Тест «упал»</button>
+        <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="playTestSound('up')">▶ Тест «встал»</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Backup -->
+  <div class="panel">
+    <div class="panel-hdr">
+      <h3>💾 Резервные копии</h3>
+      <span class="panel-sub">авто-бэкап каждые 24ч · последние 30</span>
+    </div>
+    <div style="display:flex;gap:9px;margin-bottom:14px;flex-wrap:wrap">
+      <button class="btn btn-acc" onclick="createBackup()">⬇ Создать сейчас</button>
+      <button class="btn btn-ghost" style="font-size:11px" onclick="loadBackupList()">↻ Обновить список</button>
+      <a class="btn btn-ghost" style="font-size:11px;padding:6px 12px;text-decoration:none" href="/api/export/devices.csv" download>📋 Экспорт устройств CSV</a>
+      <a class="btn btn-ghost" style="font-size:11px;padding:6px 12px;text-decoration:none" href="/api/export/events.csv" download>📋 Экспорт событий CSV</a>
+      <span id="backupStatus" style="font-size:11px;color:var(--muted)"></span>
+    </div>
+    <div id="backupList" style="display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto"></div>
+  </div>
+
+  <!-- Audit log -->
+  <div class="panel">
+    <div class="panel-hdr">
+      <h3>📒 Журнал аудита</h3>
+      <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="loadAudit()">↻</button>
+    </div>
+    <div id="auditList" style="display:flex;flex-direction:column;gap:3px;max-height:260px;overflow-y:auto;font-size:11px;font-family:'JetBrains Mono',monospace">
+      <div style="color:var(--muted)">Нажмите ↻ для загрузки</div>
+    </div>
+  </div>
+
   <!-- Auth settings -->
   <div class="panel">
     <div class="panel-hdr"><h3>🔐 Авторизация</h3></div>

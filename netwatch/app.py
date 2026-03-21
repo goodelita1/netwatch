@@ -2,6 +2,7 @@
 import os, threading, time
 from flask import Flask
 from .db      import init_db, cleanup_ping_history
+from .backup  import backup_loop
 from .routes  import bp
 from .monitor import (_do_monitor_scan, background_auto_ping,
                       background_auto_discovery, background_auto_subnet)
@@ -50,3 +51,4 @@ def start_background_tasks():
     threading.Thread(target=background_auto_discovery, daemon=True).start()
     threading.Thread(target=background_auto_subnet,    daemon=True).start()
     threading.Thread(target=_cleanup_loop,             daemon=True).start()
+    threading.Thread(target=backup_loop,               daemon=True).start()
