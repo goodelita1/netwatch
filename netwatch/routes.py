@@ -9,7 +9,7 @@ from .storage  import (load_devices, save_devices,
                         ip_to_prefix,  ensure_subnet_exists)
 from .monitor  import (status_cache, latency_cache, mac_cache, vendor_cache,
                         model_cache, ports_cache, last_scan_time,
-                        deep_scan, quick_scan,
+                        deep_scan, quick_scan, _on_ping_result,
                         auto_discovery_state, auto_subnet_state,
                         disc, run_discovery, sn_scan, run_subnet_scan)
 from .reboot   import reboot_device
@@ -217,20 +217,21 @@ def scan_single_host(ip):
         result = loop.run_until_complete(async_scan_host(ip))
     finally:
         loop.close()
-    # Update caches
+    # Update caches via _on_ping_result so events fire correctly
     mac_cache[ip]    = result.get("mac", "")
     vendor_cache[ip] = result.get("vendor", "")
     model_cache[ip]  = result.get("model", "")
     ports_cache[ip]  = result.get("open_ports", [])
-    status_cache[ip] = result.get("alive", None)
-    latency_cache[ip]= result.get("latency", None)
+    devices = load_devices()
+    dbip    = {d["ip"]: d for d in devices}
+    _on_ping_result(ip, bool(result.get("alive", False)),
+                    result.get("latency"), dbip)
     return jsonify(result)
 
 @bp.route("/api/ping/<ip>")
 @login_required
 def ping_single(ip):
     """Single device quick ping — updates cache, history AND fires events."""
-    from .monitor import _on_ping_result
     alive, ms = ping_sync(ip)
     # Load device map so _on_ping_result can resolve name
     devices   = load_devices()
@@ -246,7 +247,7 @@ def test_event():
     Dev helper — manually inject a down/up event for testing.
     POST JSON: {"ip": "x.x.x.x", "kind": "down"}   kind = down | up
     """
-    from .monitor import _on_ping_result, status_cache as sc
+    sc = status_cache  # alias for test_event
     data = request.json or {}
     ip   = data.get("ip", "")
     kind = data.get("kind", "down")   # "down" or "up"
@@ -1108,7 +1109,6 @@ def traceroute(ip):
     return jsonify({"hops": hops, "target": ip, "source": local_ip})
 
 # ── Topology ──────────────────────────────────────────────────────────────────
-from .monitor import status_cache, latency_cache
 
 @bp.route("/api/topology")
 @login_required

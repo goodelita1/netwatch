@@ -15,7 +15,7 @@ function switchTab(name,el){
   document.getElementById('tab-'+name).classList.add('active');
   if(name==='subnets'||name==='discovery') renderSubnetUI();
   if(name==='events'){ fetchEvents(); _refreshEvTestSelect(); }
-  if(name==='settings') _loadSettingsAll();
+  // settings loaded via switchTab extension below
 }
 
 // ── Auto-ping countdown ───────────────────────────────────────────────────────
@@ -1860,16 +1860,7 @@ function showTopoTooltip(event, d) {
   tt.style.top = y + 'px';
 }
 
-// ── Patch switchTab to handle new tabs ───────────────────────────────────────
-{
-  const _orig = switchTab;
-  window.switchTab = function(name, el) {
-    _orig(name, el);
-    if (name === 'topology')   loadTopology();
-    if (name === 'traceroute') initTraceDevSelect();
-    if (name === 'dashboard')  loadDashboard();
-  };
-}
+// switchTab extended below
 
 // ══════════════════════════════════════════════════════════════════════════════
 // GROUP SELECTION & ACTIONS
@@ -2843,16 +2834,29 @@ async function loadAudit() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Init on settings tab open
+// Unified tab init hooks — ONE place for all tab open handlers
 // ══════════════════════════════════════════════════════════════════════════════
-const _origLoadTgFn = loadTg;
 async function _loadSettingsAll() {
-  await _origLoadTgFn();
+  loadTg();
   loadDiscord();
   loadEmail();
   loadWebhook();
   loadBackupList();
   loadSoundSettings();
+  load2FAStatus();
+}
+
+// Single switchTab extension covering all custom tabs
+{
+  const _origSwitchTab = switchTab;
+  window.switchTab = function(name, el) {
+    _origSwitchTab(name, el);
+    if (name === 'topology')   loadTopology();
+    if (name === 'traceroute') initTraceDevSelect();
+    if (name === 'dashboard')  loadDashboard();
+    if (name === 'sla')        loadSLA();
+    if (name === 'settings')   _loadSettingsAll();
+  };
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2933,12 +2937,7 @@ async function fa2Disable() {
   }
 }
 
-// Hook load2FAStatus into settings tab open
-const _prevLoadSettings = _loadSettingsAll;
-async function _loadSettingsAll() {
-  await _prevLoadSettings();
-  load2FAStatus();
-}
+// 2FA status loaded in _loadSettingsAll below
 
 // ── QR code renderer (pure Canvas, no libs) ──────────────────────────────────
 // Minimal QR encoder for otpauth:// URIs using a CDN-free approach:
@@ -3171,13 +3170,4 @@ function _hourlyBuckets(pts, hours) {
     buckets.push({ts: t, uptime: Math.round(up / slice.length * 100)});
   }
   return buckets;
-}
-
-// Hook switchTab
-{
-  const _prev = window.switchTab;
-  window.switchTab = function(name, el) {
-    _prev(name, el);
-    if(name === 'sla') loadSLA();
-  };
 }
