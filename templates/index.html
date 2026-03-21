@@ -82,6 +82,7 @@
   <div class="tab" onclick="switchTab('subnets',this)">🗂 Подсети</div>
   <div class="tab" onclick="switchTab('topology',this)">🕸 Топология</div>
   <div class="tab" onclick="switchTab('traceroute',this)">🛤 Traceroute</div>
+  <div class="tab" onclick="switchTab('mikrotik',this)">⬡ MikroTik</div>
   <div class="tab" onclick="switchTab('settings',this)">⚙️ Настройки</div>
 </div>
 
@@ -330,6 +331,235 @@
 
     <div id="evList"><div class="ev-empty">Загрузка...</div></div>
   </div>
+</div>
+
+<!-- ════ TAB: MIKROTIK ════ -->
+<div class="tp" id="tab-mikrotik">
+
+  <!-- Device selector + connect -->
+  <div class="panel" style="margin-bottom:14px">
+    <div class="panel-hdr">
+      <h3>⬡ MikroTik RouterOS</h3>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="mtDevSel" onchange="mtSelectDevice()"
+          style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
+                 padding:5px 9px;border-radius:6px;font-family:inherit;font-size:11px;max-width:280px">
+          <option value="">— выберите роутер —</option>
+        </select>
+        <button class="btn btn-acc" style="font-size:11px;padding:5px 12px" onclick="mtConnect()">
+          🔌 Подключить
+        </button>
+        <button class="btn btn-ghost" style="font-size:10px;padding:4px 9px"
+          onclick="mtOpenDeviceCard()">✏️ Логин/пароль</button>
+        <span id="mtConnStatus" style="font-size:11px;color:var(--muted);max-width:500px"></span>
+      </div>
+    </div>
+    <!-- System resource bar -->
+    <div id="mtResBar" style="display:none;margin-top:12px;display:none">
+      <div style="display:flex;gap:10px;flex-wrap:wrap" id="mtResCards"></div>
+    </div>
+  </div>
+
+  <!-- Sub-tabs -->
+  <div style="display:flex;gap:0;margin-bottom:14px;border-bottom:1px solid var(--bd)">
+    <button id="mst-hotspot" class="btn-ghost" onclick="mtSubTab('hotspot',this)"
+      style="font-size:11px;padding:7px 14px;border:none;border-bottom:2px solid var(--acc);
+             background:none;cursor:pointer;color:var(--text);font-family:inherit;font-weight:700">
+      👤 Hotspot
+    </button>
+    <button id="mst-firewall" class="btn-ghost" onclick="mtSubTab('firewall',this)"
+      style="font-size:11px;padding:7px 14px;border:none;border-bottom:2px solid transparent;
+             background:none;cursor:pointer;color:var(--muted);font-family:inherit">
+      🛡 Firewall
+    </button>
+    <button id="mst-dhcp" class="btn-ghost" onclick="mtSubTab('dhcp',this)"
+      style="font-size:11px;padding:7px 14px;border:none;border-bottom:2px solid transparent;
+             background:none;cursor:pointer;color:var(--muted);font-family:inherit">
+      🔗 DHCP
+    </button>
+    <button id="mst-syslog" class="btn-ghost" onclick="mtSubTab('syslog',this)"
+      style="font-size:11px;padding:7px 14px;border:none;border-bottom:2px solid transparent;
+             background:none;cursor:pointer;color:var(--muted);font-family:inherit">
+      📋 Syslog
+    </button>
+  </div>
+
+  <!-- HOTSPOT panel -->
+  <div id="mt-hotspot" class="mt-panel">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+
+      <!-- Active sessions -->
+      <div class="panel" style="margin:0">
+        <div class="panel-hdr" style="margin-bottom:10px">
+          <h3>Активные сессии</h3>
+          <button class="btn btn-ghost" style="font-size:10px;padding:3px 9px" onclick="mtLoadHotspot()">↻</button>
+        </div>
+        <div id="mtSessions" style="display:flex;flex-direction:column;gap:4px;max-height:320px;overflow-y:auto">
+          <div style="color:var(--muted);font-size:11px">Нажмите «Подключить»</div>
+        </div>
+      </div>
+
+      <!-- Users -->
+      <div class="panel" style="margin:0">
+        <div class="panel-hdr" style="margin-bottom:10px">
+          <h3>Пользователи</h3>
+          <button class="btn btn-ghost" style="font-size:10px;padding:3px 9px" onclick="mtLoadHotspot()">↻</button>
+        </div>
+        <div id="mtUsers" style="display:flex;flex-direction:column;gap:4px;max-height:240px;overflow-y:auto;margin-bottom:12px">
+          <div style="color:var(--muted);font-size:11px">Нажмите «Подключить»</div>
+        </div>
+
+        <!-- Add user form -->
+        <div style="border-top:1px solid var(--bd);padding-top:10px">
+          <div style="font-size:10px;color:var(--muted);margin-bottom:7px;text-transform:uppercase;letter-spacing:.8px">Добавить пользователя</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
+            <input id="mtNewUser" placeholder="Логин"
+              style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
+                     padding:6px 9px;border-radius:6px;font-family:inherit;font-size:11px">
+            <input id="mtNewPass" placeholder="Пароль" type="password"
+              style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
+                     padding:6px 9px;border-radius:6px;font-family:inherit;font-size:11px">
+            <input id="mtNewRate" placeholder="Rate limit (5M/5M)"
+              style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
+                     padding:6px 9px;border-radius:6px;font-family:inherit;font-size:11px">
+            <select id="mtNewProfile"
+              style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
+                     padding:6px 9px;border-radius:6px;font-family:inherit;font-size:11px">
+              <option value="default">default</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:7px;align-items:center">
+            <button class="btn btn-acc" style="font-size:11px;padding:5px 12px" onclick="mtAddUser()">+ Добавить</button>
+            <span id="mtUserStatus" style="font-size:11px;color:var(--muted)"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FIREWALL panel -->
+  <div id="mt-firewall" class="mt-panel" style="display:none">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+
+      <!-- Filter rules -->
+      <div class="panel" style="margin:0">
+        <div class="panel-hdr" style="margin-bottom:10px">
+          <h3>Filter rules</h3>
+          <button class="btn btn-ghost" style="font-size:10px;padding:3px 9px" onclick="mtLoadFirewall()">↻</button>
+        </div>
+        <div id="mtFwRules" style="max-height:400px;overflow-y:auto;font-size:11px">
+          <div style="color:var(--muted)">Нажмите «Подключить»</div>
+        </div>
+      </div>
+
+      <!-- Address lists + quick block -->
+      <div class="panel" style="margin:0">
+        <div class="panel-hdr" style="margin-bottom:10px">
+          <h3>Address lists</h3>
+          <button class="btn btn-ghost" style="font-size:10px;padding:3px 9px" onclick="mtLoadFirewall()">↻</button>
+        </div>
+
+        <!-- Quick block -->
+        <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
+          <input id="mtBlockIp" placeholder="IP для блокировки"
+            style="flex:1;min-width:130px;background:var(--sf2);border:1px solid var(--bd);
+                   color:var(--text);padding:6px 9px;border-radius:6px;font-family:inherit;font-size:11px">
+          <select id="mtBlockList"
+            style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
+                   padding:6px 9px;border-radius:6px;font-family:inherit;font-size:11px">
+            <option>blacklist</option><option>blocked</option><option>drop-list</option>
+          </select>
+          <button class="btn btn-del" style="font-size:11px;padding:5px 10px" onclick="mtBlockIP()">🚫 Заблокировать</button>
+        </div>
+        <div id="mtAddrList" style="max-height:320px;overflow-y:auto;font-size:11px">
+          <div style="color:var(--muted)">Нажмите «Подключить»</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DHCP panel -->
+  <div id="mt-dhcp" class="mt-panel" style="display:none">
+    <div class="panel" style="margin:0">
+      <div class="panel-hdr" style="margin-bottom:10px">
+        <h3>DHCP лизы</h3>
+        <div style="display:flex;gap:8px">
+          <input id="mtDhcpSearch" placeholder="Поиск MAC/IP/hostname..."
+            style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
+                   padding:5px 9px;border-radius:6px;font-family:inherit;font-size:11px;width:220px"
+            oninput="mtFilterDhcp()">
+          <button class="btn btn-ghost" style="font-size:10px;padding:3px 9px" onclick="mtLoadDhcp()">↻</button>
+        </div>
+      </div>
+      <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead>
+          <tr style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">
+            <th style="padding:5px 8px;text-align:left;font-weight:500">MAC</th>
+            <th style="padding:5px 8px;text-align:left;font-weight:500">IP адрес</th>
+            <th style="padding:5px 8px;text-align:left;font-weight:500">Hostname</th>
+            <th style="padding:5px 8px;text-align:left;font-weight:500">Тип</th>
+            <th style="padding:5px 8px;text-align:left;font-weight:500">Сервер</th>
+            <th style="padding:5px 8px;text-align:left;font-weight:500">Истекает</th>
+            <th style="padding:5px 8px;text-align:center;font-weight:500">Действия</th>
+          </tr>
+        </thead>
+        <tbody id="mtDhcpBody">
+          <tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted)">Нажмите «Подключить»</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- SYSLOG panel -->
+  <div id="mt-syslog" class="mt-panel" style="display:none">
+    <div class="panel" style="margin:0">
+      <div class="panel-hdr" style="margin-bottom:10px">
+        <h3>Syslog receiver</h3>
+        <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+          <span id="mtSyslogStatus" style="font-size:11px;color:var(--muted)">не запущен</span>
+          <input id="mtSyslogPort" value="514" type="number"
+            style="width:70px;background:var(--sf2);border:1px solid var(--bd);color:var(--text);
+                   padding:4px 7px;border-radius:5px;font-family:inherit;font-size:11px">
+          <button class="btn btn-g" style="font-size:10px;padding:4px 10px" onclick="mtSyslogStart()">▶ Запустить</button>
+          <button class="btn btn-ghost" style="font-size:10px;padding:4px 10px" onclick="mtSyslogStop()">■ Стоп</button>
+          <button class="btn btn-ghost" style="font-size:10px;padding:4px 10px" onclick="mtLoadSyslog()">↻</button>
+          <button class="btn btn-del" style="font-size:10px;padding:4px 10px" onclick="mtSyslogClear()">🗑</button>
+        </div>
+      </div>
+      <!-- Filters -->
+      <div style="display:flex;gap:7px;margin-bottom:10px;flex-wrap:wrap">
+        <input id="mtSyslogSearch" placeholder="Поиск..."
+          style="flex:1;min-width:150px;background:var(--sf2);border:1px solid var(--bd);color:var(--text);
+                 padding:5px 9px;border-radius:6px;font-family:inherit;font-size:11px"
+          oninput="mtLoadSyslog()">
+        <select id="mtSyslogTopic" onchange="mtLoadSyslog()"
+          style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
+                 padding:5px 9px;border-radius:6px;font-family:inherit;font-size:11px">
+          <option value="">Все темы</option>
+          <option>firewall</option><option>dhcp</option><option>hotspot</option>
+          <option>wireless</option><option>system</option><option>ppp</option>
+        </select>
+        <input id="mtSyslogSrc" placeholder="IP источника"
+          style="width:140px;background:var(--sf2);border:1px solid var(--bd);color:var(--text);
+                 padding:5px 9px;border-radius:6px;font-family:inherit;font-size:11px"
+          oninput="mtLoadSyslog()">
+      </div>
+      <div style="font-size:10px;color:var(--muted);margin-bottom:8px;padding:7px 10px;
+                  background:var(--sf2);border-radius:6px;line-height:1.8">
+        На MikroTik: <code>/system logging action add name=netwatch target=remote remote=<b>ВАШ_IP</b> remote-port=514</code><br>
+        <code>/system logging add topics=hotspot,firewall,dhcp,system action=netwatch</code><br>
+        macOS: порт 514 требует sudo. Используйте порт <b>5140</b> и настройте forward на MikroTik.
+      </div>
+      <!-- Log entries -->
+      <div id="mtSyslogEntries" style="display:flex;flex-direction:column;gap:2px;
+           max-height:420px;overflow-y:auto;font-family:'JetBrains Mono',monospace;font-size:11px">
+        <div style="color:var(--muted)">Запустите приём и настройте отправку логов с MikroTik</div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- ════ TAB: SETTINGS ════ -->

@@ -1357,3 +1357,280 @@ def snmp_debug(ip):
     for oid, (vtype, rawbytes) in raw.items():
         out[oid] = {"type": hex(vtype), "value": _dec_val(vtype, rawbytes), "hex": rawbytes.hex()}
     return jsonify({"oids_returned": len(raw), "data": out})
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MikroTik API — Hotspot / Firewall / DHCP / Syslog
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _mt_device(ip: str):
+    """Find device in DB by IP, return (device_dict, login, password) or None."""
+    for d in load_devices():
+        if d["ip"] == ip:
+            return d, d.get("cred_login",""), d.get("cred_password","")
+    return None, "", ""
+
+
+def _mt_api(ip: str, fn):
+    """Find device credentials and call fn(api). Returns JSON-able dict."""
+    from .mikrotik import _with_api
+    d, login, password = _mt_device(ip)
+    if not login:
+        return {"ok": False, "error": "Нет учётных данных. Добавьте логин/пароль в карточку устройства."}
+    return _with_api(ip, login, password, fn)
+
+
+    # Step 2: Read initial data (some RouterOS versions send banner)
+    try:
+        s.settimeout(1.0)
+        banner = s.recv(256)
+        step("Initial banner", True, f"получено {len(banner)} байт: {banner[:60].hex()}")
+    except _sock.timeout:
+        step("Initial banner", True, "нет баннера (нормально для RouterOS 7)")
+    except Exception as e:
+        step("Initial banner", False, str(e))
+
+    # Step 3: Send /login sentence
+    def enc_word(w):
+        enc = w.encode("utf-8")
+        n = len(enc)
+        pfx = bytes([n]) if n < 128 else bytes([(n>>8)|0x80, n&0xFF])
+        return pfx + enc
+
+    sentence = b"".join(enc_word(w) for w in
+                        ["/login", f"=name={login}", f"=password={password}"]) + b"\x00"
+    try:
+        s.settimeout(5)
+        s.sendall(sentence)
+        step("Send /login", True, f"отправлено {len(sentence)} байт")
+    except Exception as e:
+        step("Send /login", False, str(e))
+        s.close()
+        return jsonify({"steps": steps, "conclusion": "Ошибка отправки"})
+
+    # Step 4: Read response - raw bytes first
+    try:
+        s.settimeout(5)
+        raw = b""
+        while True:
+            try:
+                chunk = s.recv(1024)
+                if not chunk:
+                    break
+                raw += chunk
+                if len(raw) > 2048:
+                    break
+            except _sock.timeout:
+                break
+        step("Read response raw", True,
+             f"{len(raw)} байт: {raw[:80].hex()} | text: {raw[:80]!r}")
+    except Exception as e:
+        step("Read response raw", False, str(e))
+        s.close()
+        return jsonify({"steps": steps})
+
+    s.close()
+
+    # Step 5: Parse response — check !trap BEFORE !done
+    # RouterOS sends: !trap (error) then !done (end), OR just !done (success)
+    conclusion = "Неизвестно"
+    raw_str = raw.decode("utf-8", errors="replace")
+    if "!trap" in raw_str:
+        # Extract message from trap
+        import re as _re2
+        m = _re2.search(r"message=([^\x00]+)", raw_str)
+        msg = m.group(1).strip() if m else raw_str[:100]
+        conclusion = f"❌ ЛОГИН ОТКЛОНЁН — {msg}"
+        step("Parse response", False, f"!trap: {msg}")
+    elif "!done" in raw_str and "!trap" not in raw_str:
+        conclusion = "✅ ЛОГИН УСПЕШЕН — только !done, нет !trap"
+        step("Parse response", True, "!done без ошибок")
+    elif len(raw) > 4:
+        conclusion = "⚠️ Старый стиль RouterOS (MD5 challenge) или неожиданный ответ"
+        step("Parse response", None, f"raw hex: {raw[:40].hex()}")
+    else:
+        conclusion = "⚠️ Пустой ответ от роутера"
+        step("Parse response", False, "нет данных")
+
+    return jsonify({"steps": steps, "conclusion": conclusion,
+                    "raw_hex": raw[:120].hex(), "raw_text": raw[:120].decode("utf-8","replace")})
+
+
+
+
+
+
+# ── MikroTik system status ────────────────────────────────────────────────────
+
+@bp.route("/api/mt/<ip>/status")
+@login_required
+def mt_status(ip):
+    """System resource + identity + interfaces."""
+    def fn(api):
+        res  = api.get_resource()
+        name = api.get_identity()
+        ifaces = api.get_interfaces()
+        return {"ok": True, "resource": res, "identity": name, "interfaces": ifaces}
+    return jsonify(_mt_api(ip, fn))
+
+
+# ── Hotspot sessions ──────────────────────────────────────────────────────────
+
+@bp.route("/api/mt/<ip>/hotspot/active")
+@login_required
+def mt_hotspot_active(ip):
+    return jsonify(_mt_api(ip, lambda api: {"ok": True, "sessions": api.get_hotspot_active()}))
+
+
+@bp.route("/api/mt/<ip>/hotspot/users")
+@login_required
+def mt_hotspot_users(ip):
+    def fn(api):
+        users    = api.get_hotspot_users()
+        profiles = api.get_hotspot_profiles()
+        return {"ok": True, "users": users, "profiles": profiles}
+    return jsonify(_mt_api(ip, fn))
+
+
+@bp.route("/api/mt/<ip>/hotspot/users", methods=["POST"])
+@login_required
+def mt_hotspot_add_user(ip):
+    data = request.json or {}
+    def fn(api):
+        return api.add_hotspot_user(
+            name        = data.get("name",""),
+            password    = data.get("password",""),
+            profile     = data.get("profile","default"),
+            limit_uptime= data.get("limit_uptime",""),
+            rate_limit  = data.get("rate_limit",""),
+        )
+    result = _mt_api(ip, fn)
+    if result.get("ok"):
+        add_audit("mt_hotspot_add_user", session.get("username",""), request.remote_addr or "",
+                  f"{ip} user={data.get('name','')}")
+    return jsonify(result)
+
+
+@bp.route("/api/mt/<ip>/hotspot/users/<user_id>", methods=["DELETE"])
+@login_required
+def mt_hotspot_del_user(ip, user_id):
+    result = _mt_api(ip, lambda api: api.remove_hotspot_user(user_id))
+    if result.get("ok"):
+        add_audit("mt_hotspot_del_user", session.get("username",""), request.remote_addr or "", f"{ip}")
+    return jsonify(result)
+
+
+@bp.route("/api/mt/<ip>/hotspot/sessions/<session_id>", methods=["DELETE"])
+@login_required
+def mt_hotspot_kick(ip, session_id):
+    return jsonify(_mt_api(ip, lambda api: api.disconnect_hotspot_session(session_id)))
+
+
+# ── Firewall ──────────────────────────────────────────────────────────────────
+
+@bp.route("/api/mt/<ip>/firewall/filter")
+@login_required
+def mt_fw_filter(ip):
+    return jsonify(_mt_api(ip, lambda api: {"ok": True, "rules": api.get_firewall_filter()}))
+
+
+@bp.route("/api/mt/<ip>/firewall/filter/<rule_id>", methods=["PATCH"])
+@login_required
+def mt_fw_toggle(ip, rule_id):
+    enabled = (request.json or {}).get("enabled", True)
+    result  = _mt_api(ip, lambda api: api.set_firewall_rule_enabled(rule_id, enabled))
+    if result.get("ok"):
+        add_audit("mt_fw_toggle", session.get("username",""), request.remote_addr or "",
+                  f"{ip} rule={rule_id} enabled={enabled}")
+    return jsonify(result)
+
+
+@bp.route("/api/mt/<ip>/firewall/address-list")
+@login_required
+def mt_addr_list(ip):
+    return jsonify(_mt_api(ip, lambda api: {"ok": True, "entries": api.get_address_lists()}))
+
+
+@bp.route("/api/mt/<ip>/firewall/address-list", methods=["POST"])
+@login_required
+def mt_addr_list_add(ip):
+    data = request.json or {}
+    def fn(api):
+        return api.add_to_address_list(
+            address   = data.get("address",""),
+            list_name = data.get("list","blacklist"),
+            comment   = data.get("comment",""),
+            timeout   = data.get("timeout",""),
+        )
+    result = _mt_api(ip, fn)
+    if result.get("ok"):
+        add_audit("mt_blocklist_add", session.get("username",""), request.remote_addr or "",
+                  f"{ip} address={data.get('address','')} list={data.get('list','blacklist')}")
+    return jsonify(result)
+
+
+@bp.route("/api/mt/<ip>/firewall/address-list/<entry_id>", methods=["DELETE"])
+@login_required
+def mt_addr_list_del(ip, entry_id):
+    return jsonify(_mt_api(ip, lambda api: api.remove_from_address_list(entry_id)))
+
+
+# ── DHCP leases ───────────────────────────────────────────────────────────────
+
+@bp.route("/api/mt/<ip>/dhcp")
+@login_required
+def mt_dhcp(ip):
+    return jsonify(_mt_api(ip, lambda api: {"ok": True, "leases": api.get_dhcp_leases()}))
+
+
+@bp.route("/api/mt/<ip>/dhcp/<lease_id>/static", methods=["POST"])
+@login_required
+def mt_dhcp_static(ip, lease_id):
+    return jsonify(_mt_api(ip, lambda api: api.make_dhcp_static(lease_id)))
+
+
+@bp.route("/api/mt/<ip>/dhcp/<lease_id>", methods=["DELETE"])
+@login_required
+def mt_dhcp_del(ip, lease_id):
+    return jsonify(_mt_api(ip, lambda api: api.remove_dhcp_lease(lease_id)))
+
+
+# ── Syslog ────────────────────────────────────────────────────────────────────
+
+@bp.route("/api/syslog")
+@login_required
+def syslog_get():
+    from .mikrotik import get_syslog_entries, _syslog_running
+    topic  = request.args.get("topic","")
+    src_ip = request.args.get("src_ip","")
+    search = request.args.get("search","")
+    limit  = int(request.args.get("limit", 200))
+    return jsonify({
+        "ok":      True,
+        "running": _syslog_running,
+        "entries": get_syslog_entries(limit, topic, src_ip, search),
+    })
+
+
+@bp.route("/api/syslog/start", methods=["POST"])
+@login_required
+def syslog_start():
+    from .mikrotik import start_syslog_server
+    port = int((request.json or {}).get("port", 514))
+    result = start_syslog_server(port)
+    return jsonify(result)
+
+
+@bp.route("/api/syslog/stop", methods=["POST"])
+@login_required
+def syslog_stop():
+    from .mikrotik import stop_syslog_server
+    stop_syslog_server()
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/syslog/clear", methods=["DELETE"])
+@login_required
+def syslog_clear():
+    from .mikrotik import clear_syslog
+    clear_syslog()
+    return jsonify({"ok": True})

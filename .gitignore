@@ -30,3 +30,5 @@ subnets.json
 events.json
 telegram.json
 netwatch.db
+syslog_parser_fix.py
+test_mt.py
