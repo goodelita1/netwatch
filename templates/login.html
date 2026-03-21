@@ -6,27 +6,63 @@
 <title>NetWatch — Вход</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
 <style>
-  :root{--bg:#0d1117;--sf:#111827;--bd:#1e2a3a;--text:#e2e8f0;--muted:#4a5568;--acc:#3d7fff;--red:#ff3d57;--green:#00e676;}
+  :root{--bg:#0d1117;--sf:#111827;--bd:#1e2a3a;--text:#e2e8f0;--muted:#4a5568;
+        --acc:#3d7fff;--red:#ff3d57;--green:#00e676;--yel:#ffb300;}
   *{margin:0;padding:0;box-sizing:border-box;}
-  body{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;min-height:100vh;display:flex;align-items:center;justify-content:center;}
+  body{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;
+       min-height:100vh;display:flex;align-items:center;justify-content:center;}
   body::before{content:'';position:fixed;inset:0;pointer-events:none;
-    background-image:linear-gradient(var(--bd) 1px,transparent 1px),linear-gradient(90deg,var(--bd) 1px,transparent 1px);
+    background-image:linear-gradient(var(--bd) 1px,transparent 1px),
+                     linear-gradient(90deg,var(--bd) 1px,transparent 1px);
     background-size:40px 40px;opacity:.27;}
-  .card{position:relative;z-index:1;background:var(--sf);border:1px solid var(--bd);border-radius:16px;padding:40px 36px;width:100%;max-width:380px;}
+  .card{position:relative;z-index:1;background:var(--sf);border:1px solid var(--bd);
+        border-radius:16px;padding:40px 36px;width:100%;max-width:380px;
+        transition:all .3s;}
   .logo{display:flex;align-items:center;gap:12px;margin-bottom:32px;}
-  .logo-icon{width:42px;height:42px;background:var(--acc);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;}
+  .logo-icon{width:42px;height:42px;background:var(--acc);border-radius:10px;
+             display:flex;align-items:center;justify-content:center;font-size:20px;}
   h1{font-family:'Syne',sans-serif;font-size:22px;font-weight:800;}
   h1 span{color:var(--acc);}
   .sub{font-size:10px;color:var(--muted);margin-top:2px;}
+
+  /* Step indicator */
+  .steps{display:flex;gap:6px;margin-bottom:24px;}
+  .step{flex:1;height:3px;border-radius:2px;background:var(--bd);transition:background .3s;}
+  .step.active{background:var(--acc);}
+  .step.done{background:var(--green);}
+  .step-label{font-size:10px;color:var(--muted);text-align:center;margin-bottom:16px;}
+
   .fg{display:flex;flex-direction:column;gap:6px;margin-bottom:16px;}
   label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;}
-  input{background:var(--bg);border:1px solid var(--bd);color:var(--text);padding:10px 13px;border-radius:8px;font-family:inherit;font-size:13px;outline:none;transition:border-color .18s;width:100%;}
+  input{background:var(--bg);border:1px solid var(--bd);color:var(--text);
+        padding:10px 13px;border-radius:8px;font-family:inherit;font-size:13px;
+        outline:none;transition:border-color .18s;width:100%;}
   input:focus{border-color:var(--acc);}
-  .btn{width:100%;padding:11px;border-radius:8px;border:none;cursor:pointer;font-family:inherit;font-size:13px;font-weight:700;background:var(--acc);color:#fff;transition:all .18s;margin-top:4px;}
+  input.totp-inp{font-size:22px;letter-spacing:6px;text-align:center;
+                 font-weight:700;padding:12px;}
+
+  .btn{width:100%;padding:11px;border-radius:8px;border:none;cursor:pointer;
+       font-family:inherit;font-size:13px;font-weight:700;background:var(--acc);
+       color:#fff;transition:all .18s;margin-top:4px;}
   .btn:hover{background:#5590ff;transform:translateY(-1px);}
   .btn:disabled{opacity:.5;cursor:not-allowed;transform:none;}
+  .btn-ghost{background:none;border:1px solid var(--bd);color:var(--muted);
+             font-size:11px;padding:8px;margin-top:8px;}
+  .btn-ghost:hover{border-color:var(--acc);color:var(--acc);transform:none;}
+
   .err{color:var(--red);font-size:11px;margin-top:10px;min-height:16px;text-align:center;}
   .hint{font-size:10px;color:var(--muted);text-align:center;margin-top:16px;line-height:1.7;}
+
+  /* 2FA panel */
+  #step2{display:none;}
+  .totp-icon{text-align:center;font-size:36px;margin-bottom:12px;}
+  .totp-desc{font-size:11px;color:var(--muted);text-align:center;
+             line-height:1.6;margin-bottom:16px;}
+  .totp-timer{display:flex;align-items:center;gap:6px;justify-content:center;
+              margin-top:8px;font-size:10px;color:var(--muted);}
+  .timer-bar{flex:1;height:3px;background:var(--bd);border-radius:2px;max-width:80px;}
+  .timer-fill{height:100%;background:var(--yel);border-radius:2px;
+              transition:width 1s linear;}
 </style>
 </head>
 <body>
@@ -35,38 +71,158 @@
     <div class="logo-icon">⬡</div>
     <div>
       <h1>Net<span>Watch</span></h1>
-      <div class="sub">Мониторинг сетевой инфраструктуры</div>
+      <div class="sub" id="cardSub">Мониторинг сетевой инфраструктуры</div>
     </div>
   </div>
-  <div class="fg">
-    <label>Логин</label>
-    <input id="username" type="text" placeholder="admin" autocomplete="username" autofocus>
+
+  <!-- Step indicator -->
+  <div class="steps">
+    <div class="step active" id="stepBar1"></div>
+    <div class="step" id="stepBar2"></div>
   </div>
-  <div class="fg">
-    <label>Пароль</label>
-    <input id="password" type="password" placeholder="••••••••" autocomplete="current-password"
-           onkeydown="if(event.key==='Enter')doLogin()">
+  <div class="step-label" id="stepLabel">Шаг 1 из 2 — Логин и пароль</div>
+
+  <!-- Step 1: password -->
+  <div id="step1">
+    <div class="fg">
+      <label>Логин</label>
+      <input id="username" type="text" placeholder="admin"
+             autocomplete="username" autofocus>
+    </div>
+    <div class="fg">
+      <label>Пароль</label>
+      <input id="password" type="password" placeholder="••••••••"
+             autocomplete="current-password"
+             onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button class="btn" id="loginBtn" onclick="doLogin()">Войти →</button>
+    <div class="err" id="errMsg1"></div>
+    <div class="hint">По умолчанию: <b>admin</b> / <b>netwatch</b></div>
   </div>
-  <button class="btn" id="loginBtn" onclick="doLogin()">Войти</button>
-  <div class="err" id="errMsg"></div>
-  <div class="hint">По умолчанию: <b>admin</b> / <b>netwatch</b><br>Смените пароль в ⚙️ Настройки после входа.</div>
+
+  <!-- Step 2: TOTP -->
+  <div id="step2">
+    <div class="totp-icon">🔐</div>
+    <div class="totp-desc">
+      Откройте <b>Google Authenticator</b> или <b>Authy</b><br>
+      и введите 6-значный код для <b id="totpUser"></b>
+    </div>
+    <div class="fg">
+      <label>Код 2FA</label>
+      <input id="totpCode" type="text" inputmode="numeric" maxlength="6"
+             placeholder="000000" class="totp-inp"
+             autocomplete="one-time-code"
+             oninput="this.value=this.value.replace(/\D/g,'')"
+             onkeydown="if(event.key==='Enter')doVerify2FA()">
+    </div>
+    <button class="btn" id="verifyBtn" onclick="doVerify2FA()">Подтвердить ✓</button>
+    <button class="btn btn-ghost" onclick="backToStep1()">← Назад</button>
+    <div class="err" id="errMsg2"></div>
+
+    <div class="totp-timer">
+      <span id="timerSec">30</span>с
+      <div class="timer-bar"><div class="timer-fill" id="timerFill" style="width:100%"></div></div>
+      <span style="color:var(--muted)">до смены кода</span>
+    </div>
+  </div>
 </div>
+
 <script>
-async function doLogin(){
-  const btn=document.getElementById('loginBtn');
-  const err=document.getElementById('errMsg');
-  btn.disabled=true; btn.textContent='Вход...'; err.textContent='';
-  const r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({
-      username:document.getElementById('username').value.trim(),
-      password:document.getElementById('password').value
-    })});
-  if(r.ok){window.location.href='/';}
-  else{
-    const d=await r.json();
-    err.textContent=d.error||'Ошибка входа';
-    btn.disabled=false; btn.textContent='Войти';
+let _username = '';
+let _timerInterval = null;
+
+function startTOTPTimer() {
+  if (_timerInterval) clearInterval(_timerInterval);
+  _timerInterval = setInterval(() => {
+    const now  = Math.floor(Date.now() / 1000);
+    const left = 30 - (now % 30);
+    const pct  = (left / 30) * 100;
+    const sec  = document.getElementById('timerSec');
+    const fill = document.getElementById('timerFill');
+    if (sec)  sec.textContent  = left;
+    if (fill) fill.style.width = pct + '%';
+    // Color warning when < 5s
+    if (fill) fill.style.background = left <= 5 ? 'var(--red)' : 'var(--yel)';
+  }, 1000);
+}
+
+function showStep2(username) {
+  _username = username;
+  document.getElementById('step1').style.display    = 'none';
+  document.getElementById('step2').style.display    = 'block';
+  document.getElementById('stepBar1').className     = 'step done';
+  document.getElementById('stepBar2').className     = 'step active';
+  document.getElementById('stepLabel').textContent  = 'Шаг 2 из 2 — Двухфакторная аутентификация';
+  document.getElementById('cardSub').textContent    = 'Подтверждение личности';
+  document.getElementById('totpUser').textContent   = username;
+  document.getElementById('totpCode').value         = '';
+  document.getElementById('errMsg2').textContent    = '';
+  setTimeout(() => document.getElementById('totpCode').focus(), 100);
+  startTOTPTimer();
+}
+
+function backToStep1() {
+  if (_timerInterval) clearInterval(_timerInterval);
+  document.getElementById('step1').style.display    = 'block';
+  document.getElementById('step2').style.display    = 'none';
+  document.getElementById('stepBar1').className     = 'step active';
+  document.getElementById('stepBar2').className     = 'step';
+  document.getElementById('stepLabel').textContent  = 'Шаг 1 из 2 — Логин и пароль';
+  document.getElementById('cardSub').textContent    = 'Мониторинг сетевой инфраструктуры';
+  document.getElementById('errMsg1').textContent    = '';
+}
+
+async function doLogin() {
+  const btn = document.getElementById('loginBtn');
+  const err = document.getElementById('errMsg1');
+  const u   = document.getElementById('username').value.trim();
+  const p   = document.getElementById('password').value;
+  btn.disabled = true; btn.textContent = 'Проверка...'; err.textContent = '';
+  try {
+    const r = await fetch('/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: u, password: p})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      window.location.href = '/';
+    } else if (d.need_2fa) {
+      showStep2(u);
+    } else {
+      err.textContent = d.error || 'Ошибка входа';
+    }
+  } catch(e) {
+    err.textContent = 'Ошибка соединения';
   }
+  btn.disabled = false; btn.textContent = 'Войти →';
+}
+
+async function doVerify2FA() {
+  const btn  = document.getElementById('verifyBtn');
+  const err  = document.getElementById('errMsg2');
+  const code = document.getElementById('totpCode').value.trim();
+  if (code.length !== 6) { err.textContent = 'Код должен состоять из 6 цифр'; return; }
+  btn.disabled = true; btn.textContent = 'Проверка...'; err.textContent = '';
+  try {
+    const r = await fetch('/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: _username, password: '', totp_code: code})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      if (_timerInterval) clearInterval(_timerInterval);
+      window.location.href = '/';
+    } else {
+      err.textContent = d.error || 'Неверный код';
+      document.getElementById('totpCode').value = '';
+      document.getElementById('totpCode').focus();
+    }
+  } catch(e) {
+    err.textContent = 'Ошибка соединения';
+  }
+  btn.disabled = false; btn.textContent = 'Подтвердить ✓';
 }
 </script>
 </body>

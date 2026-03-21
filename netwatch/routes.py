@@ -21,7 +21,10 @@ from .events   import (load_events, save_events, add_event, add_audit,
                        load_discord, save_discord, discord_send_test,
                        load_email_cfg, save_email_cfg, email_send_test,
                        load_webhook_cfg, save_webhook_cfg, webhook_send_test)
-from .auth     import login_required, check_credentials, change_credentials, get_username
+from .auth     import (login_required, check_credentials, change_credentials,
+                        get_username, totp_is_enabled, totp_verify,
+                        totp_get_secret, totp_enable, totp_disable,
+                        totp_generate_secret, totp_provisioning_uri)
 
 import collections as _coll, time as _time_mod
 _login_attempts: dict = {}   # ip → deque[ts]
@@ -53,16 +56,43 @@ def login_post():
     data      = request.get_json(silent=True) or {}
     username  = data.get("username", "").strip()
     password  = data.get("password", "")
+    totp_code = data.get("totp_code", "").strip()
+
+    # ── Step 2: TOTP verification (password already passed) ──
+    if session.get("awaiting_2fa") and session.get("pre2fa_user") == username:
+        secret = totp_get_secret()
+        if totp_verify(secret, totp_code):
+            session.pop("awaiting_2fa", None)
+            session.pop("pre2fa_user", None)
+            session["logged_in"] = True
+            session["username"]  = username
+            add_audit("login_ok_2fa", username, client_ip)
+            return jsonify({"ok": True})
+        else:
+            add_audit("login_fail_2fa", username, client_ip, "bad TOTP")
+            return jsonify({"ok": False, "error": "Неверный код 2FA", "need_2fa": True}), 401
+
+    # ── Step 1: password check ────────────────────────────────
     if not _check_rate_limit(client_ip):
         add_audit("login_blocked", username, client_ip, "rate limit")
-        return jsonify({"ok": False, "error": "Слишком много попыток. Подождите 15 минут."}), 429
-    if check_credentials(username, password):
-        session["logged_in"] = True
-        session["username"]  = username
-        add_audit("login_ok", username, client_ip)
-        return jsonify({"ok": True})
-    add_audit("login_fail", username, client_ip, "bad credentials")
-    return jsonify({"ok": False, "error": "Неверный логин или пароль"}), 401
+        return jsonify({"ok": False,
+                        "error": "Слишком много попыток. Подождите 15 минут."}), 429
+    if not check_credentials(username, password):
+        add_audit("login_fail", username, client_ip, "bad credentials")
+        return jsonify({"ok": False, "error": "Неверный логин или пароль"}), 401
+
+    # Password OK — check if 2FA required
+    if totp_is_enabled():
+        session["awaiting_2fa"] = True
+        session["pre2fa_user"]  = username
+        return jsonify({"ok": False, "need_2fa": True,
+                        "message": "Введите код из приложения аутентификатора"})
+
+    # No 2FA — login complete
+    session["logged_in"] = True
+    session["username"]  = username
+    add_audit("login_ok", username, client_ip)
+    return jsonify({"ok": True})
 
 @bp.route("/logout", methods=["POST"])
 def logout():
@@ -78,13 +108,63 @@ def auth_me():
 @bp.route("/api/auth/change", methods=["POST"])
 @login_required
 def auth_change():
-    data = request.json or {}
+    data  = request.json or {}
     new_u = data.get("username", "").strip()
     new_p = data.get("password", "")
     if not new_u or not new_p:
         return jsonify({"error": "Логин и пароль обязательны"}), 400
     change_credentials(new_u, new_p)
     session["username"] = new_u
+    add_audit("credentials_changed", new_u, request.remote_addr or "")
+    return jsonify({"ok": True})
+
+
+# ── 2FA management ────────────────────────────────────────────────────────────
+
+@bp.route("/api/2fa/status")
+@login_required
+def fa2_status():
+    return jsonify({"enabled": totp_is_enabled()})
+
+
+@bp.route("/api/2fa/setup", methods=["POST"])
+@login_required
+def fa2_setup():
+    """Generate new TOTP secret, store pending in session.
+    2FA is NOT active until /api/2fa/confirm called with valid code."""
+    secret   = totp_generate_secret()
+    session["pending_totp"] = secret
+    username = session.get("username", "admin")
+    uri      = totp_provisioning_uri(secret, username)
+    return jsonify({"secret": secret, "uri": uri, "username": username})
+
+
+@bp.route("/api/2fa/confirm", methods=["POST"])
+@login_required
+def fa2_confirm():
+    """Verify TOTP code against pending secret → activate 2FA."""
+    code   = (request.json or {}).get("code", "").strip()
+    secret = session.get("pending_totp", "")
+    if not secret:
+        return jsonify({"ok": False, "error": "Сначала запустите настройку 2FA"}), 400
+    if not totp_verify(secret, code):
+        return jsonify({"ok": False, "error": "Неверный код — приложение не синхронизировано"}), 400
+    totp_enable(secret)
+    session.pop("pending_totp", None)
+    add_audit("2fa_enabled", session.get("username", ""), request.remote_addr or "")
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/2fa/disable", methods=["POST"])
+@login_required
+def fa2_disable():
+    """Disable 2FA — requires current TOTP code as confirmation."""
+    code = (request.json or {}).get("code", "").strip()
+    if totp_is_enabled() and not totp_verify(totp_get_secret(), code):
+        return jsonify({"ok": False,
+                        "error": "Введите текущий код 2FA для отключения"}), 400
+    totp_disable()
+    add_audit("2fa_disabled", session.get("username", ""), request.remote_addr or "")
     return jsonify({"ok": True})
 
 # ── Main page ──────────────────────────────────────────────────────────────────
@@ -449,6 +529,299 @@ def export_events_csv():
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=events.csv"}
     )
+
+# ── SLA / uptime analytics ────────────────────────────────────────────────────
+
+@bp.route("/api/sla")
+@login_required
+def get_sla():
+    """
+    Aggregate uptime % + avg latency for each device over multiple periods.
+    Returns per-device SLA for: 1d, 7d, 30d  (from ping_history table).
+    Also returns trend: compare last 7d vs prev 7d → up/down/stable.
+    """
+    import time as _t
+    from .db import _execute as _db, get_conn
+    devices  = load_devices()
+    now      = _t.time()
+    periods  = {"1d": 86400, "7d": 604800, "30d": 2592000}
+    result   = []
+
+    for d in devices:
+        ip   = d["ip"]
+        name = d.get("name", ip)
+        row  = {"ip": ip, "name": name, "type": d.get("type","client"),
+                "online": status_cache.get(ip)}
+        for label, secs in periods.items():
+            since = now - secs
+            try:
+                r = _db(
+                    "SELECT COUNT(*) as total, SUM(alive) as up_cnt, "
+                    "AVG(CASE WHEN alive=1 AND ms IS NOT NULL THEN ms END) as avg_ms "
+                    "FROM ping_history WHERE ip=? AND ts>=?",
+                    (ip, since), fetch="one"
+                )
+                total   = r["total"] or 0
+                up_cnt  = int(r["up_cnt"] or 0)
+                avg_ms  = round(r["avg_ms"], 1) if r["avg_ms"] else None
+                uptime  = round(up_cnt / total * 100, 2) if total > 0 else None
+            except Exception:
+                total = up_cnt = 0; avg_ms = None; uptime = None
+
+            row[label] = {"uptime": uptime, "avg_ms": avg_ms, "samples": total}
+
+        # Trend: last 7d vs previous 7d
+        try:
+            cur_up  = row["7d"]["uptime"]
+            prev_r  = _db(
+                "SELECT COUNT(*) as total, SUM(alive) as up_cnt "
+                "FROM ping_history WHERE ip=? AND ts>=? AND ts<?",
+                (ip, now - 1209600, now - 604800), fetch="one"
+            )
+            p_total = prev_r["total"] or 0
+            p_up    = int(prev_r["up_cnt"] or 0)
+            prev_up = round(p_up / p_total * 100, 2) if p_total > 0 else None
+            if cur_up is None or prev_up is None:
+                row["trend"] = "new"
+            elif cur_up > prev_up + 0.5:
+                row["trend"] = "up"
+            elif cur_up < prev_up - 0.5:
+                row["trend"] = "down"
+            else:
+                row["trend"] = "stable"
+            row["prev_7d_uptime"] = prev_up
+        except Exception:
+            row["trend"] = "new"
+            row["prev_7d_uptime"] = None
+
+        # Incident count (down events) for 30d
+        try:
+            inc_r = _db(
+                "SELECT COUNT(*) as cnt FROM events "
+                "WHERE ip=? AND kind='down' AND ts>=?",
+                (ip, now - 2592000), fetch="one"
+            )
+            row["incidents_30d"] = inc_r["cnt"] if inc_r else 0
+        except Exception:
+            row["incidents_30d"] = 0
+
+        result.append(row)
+
+    # Sort: worst uptime first (30d)
+    result.sort(key=lambda x: (x["30d"]["uptime"] or 101))
+    return jsonify(result)
+
+
+# ── PDF / Print Report ─────────────────────────────────────────────────────────
+
+@bp.route("/api/report/html")
+@login_required
+def get_report_html():
+    """
+    Generate a print-ready HTML report (SLA + events).
+    period: 7d | 30d (query param)
+    Browser opens this in new tab → Ctrl+P / Cmd+P to print/save as PDF.
+    """
+    import time as _t
+    from datetime import datetime
+    from .db import _execute as _db
+
+    period_label = request.args.get("period", "7d")
+    period_secs  = 604800 if period_label == "7d" else 2592000
+    devices      = load_devices()
+    now          = _t.time()
+    since        = now - period_secs
+
+    # Build SLA table
+    rows = []
+    for d in devices:
+        ip = d["ip"]
+        try:
+            r = _db(
+                "SELECT COUNT(*) as total, SUM(alive) as up_cnt, "
+                "AVG(CASE WHEN alive=1 AND ms IS NOT NULL THEN ms END) as avg_ms "
+                "FROM ping_history WHERE ip=? AND ts>=?",
+                (ip, since), fetch="one"
+            )
+            total  = r["total"] or 0
+            up_cnt = int(r["up_cnt"] or 0)
+            uptime = round(up_cnt / total * 100, 2) if total > 0 else None
+            avg_ms = round(r["avg_ms"], 1) if r["avg_ms"] else None
+        except Exception:
+            total = up_cnt = 0; uptime = None; avg_ms = None
+
+        inc_r = _db(
+            "SELECT COUNT(*) as cnt FROM events WHERE ip=? AND kind='down' AND ts>=?",
+            (ip, since), fetch="one"
+        )
+        incidents = inc_r["cnt"] if inc_r else 0
+        rows.append({
+            "ip":       ip,
+            "name":     d.get("name", ip),
+            "type":     d.get("type", "—"),
+            "location": d.get("location", ""),
+            "uptime":   uptime,
+            "avg_ms":   avg_ms,
+            "samples":  total,
+            "incidents":incidents,
+            "online":   status_cache.get(ip),
+        })
+    rows.sort(key=lambda x: (x["uptime"] or 101))
+
+    # Events for period
+    evs_r = _db(
+        "SELECT ts, kind, ip, name, detail FROM events WHERE ts>=? ORDER BY ts DESC LIMIT 500",
+        (since,), fetch="all"
+    )
+    events = [dict(e) for e in evs_r] if evs_r else []
+
+    period_name = "7 дней" if period_label == "7d" else "30 дней"
+    generated   = datetime.now().strftime("%d.%m.%Y %H:%M")
+    online_cnt  = sum(1 for v in status_cache.values() if v is True)
+    offline_cnt = sum(1 for v in status_cache.values() if v is False)
+
+    def uptime_color(u):
+        if u is None:    return "#888"
+        if u >= 99:      return "#00c853"
+        if u >= 95:      return "#ffab00"
+        if u >= 80:      return "#ff6d00"
+        return "#d50000"
+
+    def ev_icon(kind):
+        return {"down":"🔴","up":"🟢","power_off":"⚡","power_on":"⚡",
+                "reboot":"🔄","new_host":"🆕","down_alert":"⚠️"}.get(kind,"ℹ️")
+
+    # Build HTML
+    rows_html = ""
+    for r in rows:
+        u     = r["uptime"]
+        col   = uptime_color(u)
+        u_str = f"{u}%" if u is not None else "—"
+        bar   = f'<div style="width:{u or 0}%;height:6px;background:{col};border-radius:3px"></div>' if u else ""
+        rows_html += f"""
+        <tr>
+          <td>{r["name"]}</td>
+          <td style="font-family:monospace;font-size:11px">{r["ip"]}</td>
+          <td>{r["type"]}</td>
+          <td>{r["location"] or "—"}</td>
+          <td style="text-align:center">
+            <span style="color:{col};font-weight:700">{u_str}</span>
+            <div style="background:#e0e0e0;border-radius:3px;margin-top:3px">{bar}</div>
+          </td>
+          <td style="text-align:center">{str(r["avg_ms"])+" мс" if r["avg_ms"] else "—"}</td>
+          <td style="text-align:center">{r["incidents"]}</td>
+          <td style="text-align:center">{r["samples"]}</td>
+        </tr>"""
+
+    evs_html = ""
+    for e in events[:200]:
+        dt  = datetime.fromtimestamp(e["ts"]).strftime("%d.%m %H:%M")
+        evs_html += f"""
+        <tr>
+          <td style="font-size:11px;white-space:nowrap">{dt}</td>
+          <td>{ev_icon(e["kind"])} {e["kind"]}</td>
+          <td>{e["name"]}</td>
+          <td style="font-family:monospace;font-size:11px">{e["ip"]}</td>
+          <td style="font-size:11px">{e["detail"]}</td>
+        </tr>"""
+
+    avg_up_all = [r["uptime"] for r in rows if r["uptime"] is not None]
+    avg_up_str = f"{round(sum(avg_up_all)/len(avg_up_all),1)}%" if avg_up_all else "—"
+
+    html = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>NetWatch — Отчёт {period_name}</title>
+<style>
+  @page {{ size: A4 landscape; margin: 15mm 10mm; }}
+  @media print {{
+    .no-print {{ display:none; }}
+    body {{ font-size: 11px; }}
+    h2 {{ page-break-before: always; }}
+    h2:first-of-type {{ page-break-before: avoid; }}
+  }}
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, Arial, sans-serif; font-size: 12px;
+          color: #1a1a1a; background: #fff; padding: 20px; }}
+  .header {{ display:flex; justify-content:space-between; align-items:flex-start;
+             border-bottom: 2px solid #1a237e; padding-bottom: 12px; margin-bottom: 18px; }}
+  .logo {{ font-size: 24px; font-weight: 800; color: #1a237e; }}
+  .logo span {{ color: #1976d2; }}
+  .meta {{ font-size: 11px; color: #555; text-align: right; line-height: 1.8; }}
+  .summary {{ display:flex; gap:16px; margin-bottom: 20px; flex-wrap:wrap; }}
+  .sc {{ background: #f5f5f5; border-radius: 8px; padding: 10px 16px; min-width: 100px; }}
+  .sc-n {{ font-size: 20px; font-weight: 700; color: #1a237e; }}
+  .sc-l {{ font-size: 10px; color: #777; margin-top: 2px; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 24px; }}
+  th {{ background: #1a237e; color: #fff; padding: 7px 8px; text-align: left;
+        font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }}
+  td {{ padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: middle; }}
+  tr:nth-child(even) td {{ background: #fafafa; }}
+  tr:hover td {{ background: #e8eaf6; }}
+  h2 {{ font-size: 14px; color: #1a237e; margin: 20px 0 10px;
+        padding-bottom: 6px; border-bottom: 1px solid #c5cae9; }}
+  .badge {{ display:inline-block; padding: 2px 8px; border-radius: 10px;
+            font-size: 10px; font-weight: 600; }}
+  .btn-print {{ position:fixed; top:16px; right:16px; background:#1976d2; color:#fff;
+               border:none; padding:10px 20px; border-radius:8px; cursor:pointer;
+               font-size:13px; font-weight:600; box-shadow:0 2px 8px rgba(0,0,0,.2); }}
+  .btn-print:hover {{ background:#1565c0; }}
+</style>
+</head>
+<body>
+
+<button class="btn-print no-print" onclick="window.print()">🖨 Печать / Сохранить PDF</button>
+
+<div class="header">
+  <div>
+    <div class="logo">Net<span>Watch</span></div>
+    <div style="font-size:13px;color:#555;margin-top:4px">Отчёт за {period_name}</div>
+  </div>
+  <div class="meta">
+    Сгенерирован: {generated}<br>
+    Период: {datetime.fromtimestamp(since).strftime("%d.%m.%Y")} — {datetime.fromtimestamp(now).strftime("%d.%m.%Y")}<br>
+    Устройств: {len(devices)} | Онлайн: {online_cnt} | Оффлайн: {offline_cnt}
+  </div>
+</div>
+
+<div class="summary">
+  <div class="sc"><div class="sc-n">{len(devices)}</div><div class="sc-l">Всего устройств</div></div>
+  <div class="sc"><div class="sc-n" style="color:#00897b">{online_cnt}</div><div class="sc-l">Онлайн</div></div>
+  <div class="sc"><div class="sc-n" style="color:#e53935">{offline_cnt}</div><div class="sc-l">Оффлайн</div></div>
+  <div class="sc"><div class="sc-n" style="color:#1976d2">{avg_up_str}</div><div class="sc-l">Средний uptime</div></div>
+  <div class="sc"><div class="sc-n">{len(events)}</div><div class="sc-l">Событий за период</div></div>
+</div>
+
+<h2>SLA — доступность устройств</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Устройство</th><th>IP</th><th>Тип</th><th>Расположение</th>
+      <th>Uptime %</th><th>Ср. пинг</th><th>Инциденты</th><th>Замеров</th>
+    </tr>
+  </thead>
+  <tbody>{rows_html}</tbody>
+</table>
+
+<h2>Журнал событий ({len(events)} записей)</h2>
+<table>
+  <thead>
+    <tr><th>Время</th><th>Тип</th><th>Устройство</th><th>IP</th><th>Подробности</th></tr>
+  </thead>
+  <tbody>{evs_html}</tbody>
+</table>
+
+<div style="text-align:center;color:#aaa;font-size:10px;margin-top:20px;padding-top:10px;border-top:1px solid #eee">
+  NetWatch — Автоматически сгенерированный отчёт · {generated}
+</div>
+</body>
+</html>"""
+
+    from flask import Response
+    return Response(html, mimetype="text/html",
+                    headers={"Content-Disposition": "inline"})
+
 
 # ── Backup ────────────────────────────────────────────────────────────────────
 @bp.route("/api/backup", methods=["POST"])

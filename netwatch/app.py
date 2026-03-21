@@ -20,6 +20,13 @@ def create_app() -> Flask:
         static_folder=os.path.join(_ROOT, "static"),
     )
 
+    # ProxyFix — корректный X-Real-IP когда запросы идут через nginx
+    try:
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    except ImportError:
+        pass  # werkzeug не установлен — работает без proxy
+
     # Secret key — генерируем один раз, храним в файле
     _sk_file = os.path.join(_ROOT, ".secret_key")
     if os.path.exists(_sk_file):

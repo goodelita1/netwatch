@@ -76,6 +76,7 @@
 <div class="tabs">
   <div class="tab active" onclick="switchTab('monitor',this)">📡 Мониторинг</div>
   <div class="tab" onclick="switchTab('dashboard',this)">📊 Дашборд</div>
+  <div class="tab" onclick="switchTab('sla',this)">📈 SLA</div>
   <div class="tab" onclick="switchTab('events',this)">📋 События</div>
   <div class="tab" onclick="switchTab('discovery',this)">🔍 Сканер хостов</div>
   <div class="tab" onclick="switchTab('subnets',this)">🗂 Подсети</div>
@@ -160,6 +161,84 @@
 </div>
 
 <!-- ════ TAB: EVENTS ════ -->
+<!-- ════ TAB: SLA ════ -->
+<div class="tp" id="tab-sla">
+
+  <!-- Header + controls -->
+  <div class="panel" style="margin-bottom:14px">
+    <div class="panel-hdr">
+      <h3>📈 SLA — Доступность устройств</h3>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span style="font-size:10px;color:var(--muted)">Период:</span>
+        <button id="slaPeriod1d"  class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="setSLAPeriod('1d')">24ч</button>
+        <button id="slaPeriod7d"  class="btn btn-acc"   style="font-size:11px;padding:4px 10px" onclick="setSLAPeriod('7d')">7 дней</button>
+        <button id="slaPeriod30d" class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="setSLAPeriod('30d')">30 дней</button>
+        <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="loadSLA()">↻</button>
+        <span style="font-size:11px;color:var(--muted)" id="slaNote"></span>
+      </div>
+    </div>
+
+    <!-- Summary cards -->
+    <div class="stats" id="slaSummaryCards" style="margin:12px 0 0">
+      <div class="sc"><div class="sc-label">Средний uptime</div><div class="sc-val g" id="slaAvgUp">—</div></div>
+      <div class="sc"><div class="sc-label">≥ 99% устройств</div><div class="sc-val g" id="slaGreen">—</div></div>
+      <div class="sc"><div class="sc-label">95–99%</div><div class="sc-val y" id="slaYellow">—</div></div>
+      <div class="sc"><div class="sc-label">&lt; 95%</div><div class="sc-val r" id="slaRed">—</div></div>
+      <div class="sc"><div class="sc-label">Нет данных</div><div class="sc-val t" id="slaNoData">—</div></div>
+    </div>
+  </div>
+
+  <!-- Uptime chart for selected device -->
+  <div class="panel" style="margin-bottom:14px">
+    <div class="panel-hdr" style="margin-bottom:10px">
+      <h3>График доступности</h3>
+      <select id="slaChartDev" onchange="renderSLAChart()"
+        style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
+               padding:4px 8px;border-radius:5px;font-family:inherit;font-size:11px;max-width:260px">
+        <option value="">— выберите устройство —</option>
+      </select>
+    </div>
+    <div style="position:relative;height:120px"><canvas id="slaTimelineChart"></canvas></div>
+  </div>
+
+  <!-- Detailed table -->
+  <div class="panel" style="margin-bottom:0">
+    <div class="panel-hdr" style="margin-bottom:10px">
+      <h3>Таблица SLA</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="slaSearch" placeholder="Фильтр по имени/IP..."
+          style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
+                 padding:5px 9px;border-radius:6px;font-family:inherit;font-size:11px;width:200px"
+          oninput="renderSLATable()">
+        <a id="slaReport7d"  href="/api/report/html?period=7d"  target="_blank"
+          class="btn btn-ghost" style="font-size:11px;padding:5px 10px;text-decoration:none">📄 PDF 7д</a>
+        <a id="slaReport30d" href="/api/report/html?period=30d" target="_blank"
+          class="btn btn-ghost" style="font-size:11px;padding:5px 10px;text-decoration:none">📄 PDF 30д</a>
+      </div>
+    </div>
+
+    <div style="overflow-x:auto">
+    <table id="slaTable" style="width:100%;border-collapse:collapse;font-size:11px">
+      <thead>
+        <tr id="slaTableHead" style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">
+          <th style="padding:5px 8px;text-align:left;font-weight:500;cursor:pointer" onclick="sortSLA('name')">Устройство ⇅</th>
+          <th style="padding:5px 8px;text-align:left;font-weight:500">IP</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500;cursor:pointer" onclick="sortSLA('uptime')">Uptime ⇅</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500">Тренд</th>
+          <th style="padding:5px 8px;text-align:right;font-weight:500;cursor:pointer" onclick="sortSLA('avg_ms')">Ср. пинг ⇅</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500;cursor:pointer" onclick="sortSLA('incidents')">Инциденты ⇅</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500">Замеров</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500">Сейчас</th>
+        </tr>
+      </thead>
+      <tbody id="slaTableBody">
+        <tr><td colspan="8" style="text-align:center;padding:30px;color:var(--muted)">Загрузка...</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+
 <!-- ════ TAB: DASHBOARD ════ -->
 <div class="tp" id="tab-dashboard">
   <!-- Summary cards -->
@@ -489,6 +568,89 @@
     <div style="display:flex;gap:9px;margin-top:14px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-acc" onclick="changeAuth()">💾 Сменить</button>
       <span id="authStatus"></span>
+    </div>
+  </div>
+
+  <!-- 2FA -->
+  <div class="panel">
+    <div class="panel-hdr">
+      <h3>📱 Двухфакторная аутентификация</h3>
+      <span id="fa2StatusBadge" class="panel-sub">загрузка...</span>
+    </div>
+
+    <!-- Status: disabled -->
+    <div id="fa2Disabled">
+      <p class="hint" style="margin-bottom:14px;line-height:1.8">
+        2FA добавляет второй уровень защиты. После входа с паролем потребуется
+        ввести код из приложения <b>Google Authenticator</b> или <b>Authy</b>.
+      </p>
+      <button class="btn btn-acc" style="max-width:220px" onclick="fa2StartSetup()">
+        🔐 Включить 2FA
+      </button>
+    </div>
+
+    <!-- Setup: QR code step -->
+    <div id="fa2Setup" style="display:none">
+      <p style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.7">
+        <b>Шаг 1.</b> Откройте Google Authenticator или Authy.<br>
+        <b>Шаг 2.</b> Нажмите «+» → «Сканировать QR-код» и отсканируйте код ниже.<br>
+        <b>Шаг 3.</b> Введите 6-значный код из приложения для подтверждения.
+      </p>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start">
+        <!-- QR code (rendered via JS into canvas) -->
+        <div>
+          <canvas id="fa2QrCanvas" width="160" height="160"
+            style="border:1px solid var(--bd);border-radius:8px;background:#fff;display:block"></canvas>
+          <div style="font-size:9px;color:var(--muted);margin-top:6px;text-align:center">QR-код</div>
+        </div>
+        <div style="flex:1;min-width:180px">
+          <div style="font-size:10px;color:var(--muted);margin-bottom:4px">Или введите секрет вручную:</div>
+          <div id="fa2SecretDisplay"
+            style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;
+                   letter-spacing:2px;background:var(--sf2);padding:8px 12px;border-radius:6px;
+                   border:1px solid var(--bd);word-break:break-all;margin-bottom:14px"></div>
+          <div style="font-size:10px;color:var(--muted);margin-bottom:6px">Код подтверждения:</div>
+          <input id="fa2ConfirmCode" type="text" inputmode="numeric" maxlength="6"
+            placeholder="000000"
+            style="font-size:18px;letter-spacing:5px;text-align:center;font-weight:700;
+                   background:var(--sf2);border:1px solid var(--bd);color:var(--text);
+                   padding:9px;border-radius:7px;font-family:inherit;width:140px;outline:none"
+            oninput="this.value=this.value.replace(/\D/g,'')"
+            onkeydown="if(event.key==='Enter')fa2Confirm()">
+          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+            <button class="btn btn-acc" style="max-width:180px" onclick="fa2Confirm()">✓ Подтвердить</button>
+            <button class="btn btn-ghost" style="max-width:120px;font-size:11px" onclick="fa2CancelSetup()">Отмена</button>
+          </div>
+          <span id="fa2SetupStatus" style="font-size:11px;color:var(--muted);display:block;margin-top:8px"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status: enabled -->
+    <div id="fa2Enabled" style="display:none">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;
+                  padding:10px 14px;background:var(--gd);border:1px solid #00e67630;border-radius:8px">
+        <span style="font-size:20px">🛡</span>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--green)">2FA включена</div>
+          <div style="font-size:10px;color:var(--muted)">Вход требует код из аутентификатора</div>
+        </div>
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">
+        Для отключения введите текущий код из приложения:
+      </p>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="fa2DisableCode" type="text" inputmode="numeric" maxlength="6"
+          placeholder="000000"
+          style="font-size:16px;letter-spacing:4px;text-align:center;font-weight:700;
+                 background:var(--sf2);border:1px solid var(--bd);color:var(--text);
+                 padding:8px 12px;border-radius:7px;font-family:inherit;width:140px;outline:none"
+          oninput="this.value=this.value.replace(/\D/g,'')">
+        <button class="btn btn-del" style="max-width:160px;font-size:12px" onclick="fa2Disable()">
+          🔓 Отключить 2FA
+        </button>
+        <span id="fa2DisableStatus" style="font-size:11px;color:var(--muted)"></span>
+      </div>
     </div>
   </div>
 
