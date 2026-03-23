@@ -35,3 +35,6 @@ netwatch.db
 syslog_parser_fix.py
 test_mt.py
 AGENTS.md
+start_https.sh
+stop_https.sh
+netwatch.conf
