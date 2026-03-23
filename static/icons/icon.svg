@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="113" fill="#0d1117"/>
-  <polygon points="397.9,174.1 397.9,337.9 256.0,419.8 114.1,337.9 114.1,174.1 256.0,92.2" fill="#3d7fff"/>
-  <text x="256" y="256" font-family="monospace" font-weight="bold"
-        font-size="113" fill="#e0e6f0" text-anchor="middle"
-        dominant-baseline="central">NW</text>
-</svg>
