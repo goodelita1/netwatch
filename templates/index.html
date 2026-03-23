@@ -2,11 +2,42 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
 <title>NetWatch</title>
+
+<!-- PWA manifest & theme -->
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#0d1117">
+
+<!-- Android PWA -->
+<meta name="mobile-web-app-capable" content="yes">
+
+<!-- iOS / Safari PWA -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="NetWatch">
+
+<!-- Icons -->
+<link rel="icon" type="image/png" sizes="96x96"   href="/static/icons/icon-96.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" sizes="152x152" href="/static/icons/icon-152.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" sizes="192x192" href="/static/icons/icon-192.png">
+
+<!-- Fonts & CSS -->
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/css/main.css">
 
+<!-- Service Worker -->
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/static/sw.js', { scope: '/' })
+      .then(r => console.log('[sw] registered scope:', r.scope))
+      .catch(e => console.warn('[sw] failed:', e));
+  });
+}
+</script>
 </head>
 <body>
 <div class="wrap">
@@ -16,14 +47,15 @@
     <div class="logo-icon">⬡</div>
     <div>
       <h1>Net<span>Watch</span></h1>
-      <div style="font-size:10px;color:var(--muted)">Мониторинг сетевой инфраструктуры</div>
+      <div style="font-size:10px;color:var(--muted)">Моніторинг мережевої інфраструктури</div>
     </div>
   </div>
   <div class="hdr-r">
-    <span class="last-scan" id="lastScan">Ожидание...</span>
+    <span class="last-scan" id="lastScan">Очікування...</span>
+    <span id="wsIndicator" title="WebSocket" style="font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;background:rgba(255,179,0,.15);color:var(--yel);cursor:default;transition:all .4s">↻ Poll</span>
     <div style="position:relative;display:inline-block">
       <button id="autoBadge" onclick="toggleAutoscanDropdown()" style="background:var(--gd);color:var(--green);border:1px solid #00e67630;padding:4px 10px;border-radius:5px;font-family:inherit;font-size:10px;cursor:pointer;display:flex;align-items:center;gap:5px">
-        <span id="autoBadgeText">⏱ авто-пинг 60с</span>
+        <span id="autoBadgeText">⏱ авто-пінг 60с</span>
         <span id="autoBadgeCount" style="display:none;background:var(--yel);color:#000;border-radius:10px;padding:1px 6px;font-size:9px;font-weight:700"></span>
         <span id="autoBadgeArrow" style="font-size:8px;transition:transform .2s">▼</span>
       </button>
@@ -31,8 +63,8 @@
       <div id="autoscanDropdown" style="display:none;position:absolute;top:calc(100% + 6px);right:0;width:420px;max-width:90vw;background:var(--sf);border:1px solid var(--bd);border-radius:12px;box-shadow:0 8px 32px #00000060;z-index:500;overflow:hidden">
         <div style="padding:12px 14px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between">
           <div>
-            <div style="font-size:13px;font-weight:700">🤖 Авто-сканирование</div>
-            <div style="font-size:10px;color:var(--muted);margin-top:2px">хосты каждые 5 мин · подсети каждые 15 мин</div>
+            <div style="font-size:13px;font-weight:700">🤖 Авто-сканування</div>
+            <div style="font-size:10px;color:var(--muted);margin-top:2px">хости кожні 5 хв · підмережі кожні 15 хв</div>
           </div>
           <button onclick="toggleAutoscanDropdown()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:0 4px;line-height:1">✕</button>
         </div>
@@ -41,14 +73,14 @@
           <div style="flex:1;padding:8px 14px;border-right:1px solid var(--bd)">
             <div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">
               <div class="pulse idle" id="discPulse" style="width:6px;height:6px;border-radius:50%;background:var(--muted)"></div>
-              <span style="font-size:10px;font-weight:600;color:var(--text)">Хосты</span>
+              <span style="font-size:10px;font-weight:600;color:var(--text)">Хости</span>
             </div>
             <div id="discTimerLbl" style="font-size:9px;color:var(--muted)">ожидание...</div>
           </div>
           <div style="flex:1;padding:8px 14px">
             <div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">
               <div class="pulse idle" id="snPulse" style="width:6px;height:6px;border-radius:50%;background:var(--muted)"></div>
-              <span style="font-size:10px;font-weight:600;color:var(--text)">Подсети</span>
+              <span style="font-size:10px;font-weight:600;color:var(--text)">Підмережі</span>
             </div>
             <div id="snTimerLbl" style="font-size:9px;color:var(--muted)">ожидание...</div>
           </div>
@@ -56,34 +88,34 @@
         <!-- Content: two columns -->
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;max-height:320px;overflow-y:auto">
           <div style="padding:10px 14px;border-right:1px solid var(--bd)">
-            <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">🔴 Незарег. хосты</div>
-            <div id="autoDiscList"><div style="font-size:11px;color:var(--muted)">Ожидание...</div></div>
+            <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">🔴 Незарег. хости</div>
+            <div id="autoDiscList"><div style="font-size:11px;color:var(--muted)">Очікування...</div></div>
           </div>
           <div style="padding:10px 14px">
-            <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">🛰 Новые подсети</div>
-            <div id="autoSnList"><div style="font-size:11px;color:var(--muted)">Ожидание...</div></div>
+            <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">🛰 Нові підмережі</div>
+            <div id="autoSnList"><div style="font-size:11px;color:var(--muted)">Очікування...</div></div>
           </div>
         </div>
       </div>
     </div>
-    <button class="btn btn-g" id="scanBtn" onclick="triggerScan()">▶ Пинг</button>
-    <button class="btn btn-cyan" id="deepBtn" onclick="triggerDeepScan()">🔬 Глубокий скан</button>
-    <button class="btn btn-acc" onclick="openAddModal()">+ Устройство</button>
-    <button class="btn btn-ghost" style="font-size:11px;padding:6px 10px" onclick="doLogout()" title="Выйти">👤 {{ username }} ↩</button>
+    <button class="btn btn-g" id="scanBtn" onclick="triggerScan()">▶ Пінг</button>
+    <button class="btn btn-cyan" id="deepBtn" onclick="triggerDeepScan()">🔬 Глибокий скан</button>
+    <button class="btn btn-acc" onclick="openAddModal()">+ Пристрій</button>
+    <button class="btn btn-ghost" style="font-size:11px;padding:6px 10px" onclick="doLogout()" title="Вийти">👤 {{ username }} ↩</button>
   </div>
 </header>
 
 <div class="tabs">
-  <div class="tab active" onclick="switchTab('monitor',this)">📡 Мониторинг</div>
+  <div class="tab active" onclick="switchTab('monitor',this)">📡 Моніторинг</div>
   <div class="tab" onclick="switchTab('dashboard',this)">📊 Дашборд</div>
   <div class="tab" onclick="switchTab('sla',this)">📈 SLA</div>
-  <div class="tab" onclick="switchTab('events',this)">📋 События</div>
-  <div class="tab" onclick="switchTab('discovery',this)">🔍 Сканер хостов</div>
-  <div class="tab" onclick="switchTab('subnets',this)">🗂 Подсети</div>
-  <div class="tab" onclick="switchTab('topology',this)">🕸 Топология</div>
+  <div class="tab" onclick="switchTab('events',this)">📋 Події</div>
+  <div class="tab" onclick="switchTab('discovery',this)">🔍 Сканер хостів</div>
+  <div class="tab" onclick="switchTab('subnets',this)">🗂 Підмережі</div>
+  <div class="tab" onclick="switchTab('topology',this)">🕸 Топологія</div>
   <div class="tab" onclick="switchTab('traceroute',this)">🛤 Traceroute</div>
   <div class="tab" onclick="switchTab('mikrotik',this)">⬡ MikroTik</div>
-  <div class="tab" onclick="switchTab('settings',this)">⚙️ Настройки</div>
+  <div class="tab" onclick="switchTab('settings',this)">⚙️ Налаштування</div>
 </div>
 
 <!-- ════ TAB: MONITOR ════ -->
@@ -94,40 +126,40 @@
     <div class="power-icon" id="powerIcon">⚡</div>
     <div class="power-text">
       <div class="power-title" id="powerTitle">Проверка питания...</div>
-      <div class="power-sub" id="powerSub">Ожидание первого пинга 192.168.88.1</div>
+      <div class="power-sub" id="powerSub">Ожидание первого пінга 192.168.88.1</div>
     </div>
   </div>
 
   <!-- Auto-scan results panel -->
 
   <div class="stats">
-    <div class="sc"><div class="sc-label">Всего</div><div class="sc-val t" id="sTotal">—</div></div>
+    <div class="sc"><div class="sc-label">Всього</div><div class="sc-val t" id="sTotal">—</div></div>
     <div class="sc"><div class="sc-label">Онлайн</div><div class="sc-val g" id="sOnline">—</div></div>
-    <div class="sc"><div class="sc-label">Оффлайн</div><div class="sc-val r" id="sOffline">—</div></div>
-    <div class="sc"><div class="sc-label">Средний пинг</div><div class="sc-val c" id="sAvgPing">—</div></div>
-    <div class="sc"><div class="sc-label">Неизвестно</div><div class="sc-val t" id="sUnknown">—</div></div>
+    <div class="sc"><div class="sc-label">Офлайн</div><div class="sc-val r" id="sOffline">—</div></div>
+    <div class="sc"><div class="sc-label">Середній пінг</div><div class="sc-val c" id="sAvgPing">—</div></div>
+    <div class="sc"><div class="sc-label">Невідомо</div><div class="sc-val t" id="sUnknown">—</div></div>
   </div>
   <!-- Group action bar (hidden until selection) -->
   <div id="groupBar" style="display:none;background:var(--sf2);border:1px solid var(--acc);border-radius:9px;padding:9px 14px;margin-bottom:12px;display:none;align-items:center;gap:10px;flex-wrap:wrap">
-    <span style="font-size:11px;font-weight:700;color:var(--acc)" id="groupBarCount">0 выбрано</span>
-    <button class="btn btn-g" style="font-size:11px;padding:5px 12px" onclick="groupPing()">⚡ Пинг всех</button>
+    <span style="font-size:11px;font-weight:700;color:var(--acc)" id="groupBarCount">0 вибрано</span>
+    <button class="btn btn-g" style="font-size:11px;padding:5px 12px" onclick="groupPing()">⚡ Пінг всіх</button>
     <button class="btn btn-reboot" style="font-size:11px;padding:5px 12px;border-radius:6px;border:1px solid #ff3d5760;cursor:pointer;font-family:inherit;font-weight:700" onclick="groupReboot()">⟳ Reboot всех</button>
-    <button class="btn btn-ghost" style="font-size:11px;padding:5px 12px" onclick="clearSelection()">✕ Снять выбор</button>
+    <button class="btn btn-ghost" style="font-size:11px;padding:5px 12px" onclick="clearSelection()">✕ Зняти вибір</button>
     <div id="groupProgress" style="font-size:10px;color:var(--muted);display:none"></div>
   </div>
   <div class="toolbar">
     <div class="filters">
-      <button class="fbtn active" onclick="setFilter('all',this)">Все</button>
+      <button class="fbtn active" onclick="setFilter('all',this)">Всі</button>
       <button class="fbtn" onclick="setFilter('online',this)">Онлайн</button>
-      <button class="fbtn" onclick="setFilter('offline',this)">Оффлайн</button>
-      <button class="fbtn" onclick="setFilter('router',this)">Роутеры</button>
-      <button class="fbtn" onclick="setFilter('camera',this)">Камеры</button>
+      <button class="fbtn" onclick="setFilter('offline',this)">Офлайн</button>
+      <button class="fbtn" onclick="setFilter('router',this)">Роутери</button>
+      <button class="fbtn" onclick="setFilter('camera',this)">Камери</button>
       <button class="fbtn" onclick="setFilter('ap',this)">WiFi AP</button>
     </div>
     <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
       <div style="position:relative">
         <input id="searchInput" oninput="setSearch(this.value)"
-          placeholder="🔍 IP, название, вендор..."
+          placeholder="🔍 IP, назва, вендор..."
           style="background:var(--sf);border:1px solid var(--bd);color:var(--text);
                  padding:6px 30px 6px 10px;border-radius:6px;font-family:inherit;
                  font-size:11px;outline:none;width:200px;transition:border-color .18s"
@@ -137,23 +169,23 @@
           style="display:none;position:absolute;right:8px;top:50%;transform:translateY(-50%);
                  cursor:pointer;color:var(--muted);font-size:14px">✕</span>
       </div>
-      <span style="font-size:10px;color:var(--muted)">Страница:</span>
+      <span style="font-size:10px;color:var(--muted)">Сторінка:</span>
       <select id="pageSizeSelect" onchange="setPageSize(+this.value)" style="background:var(--sf);border:1px solid var(--bd);color:var(--text);padding:5px 8px;border-radius:6px;font-family:inherit;font-size:11px;cursor:pointer">
         <option value="25">25</option>
         <option value="50" selected>50</option>
         <option value="100">100</option>
-        <option value="0">Все</option>
+        <option value="0">Всі</option>
       </select>
-      <span style="font-size:10px;color:var(--muted)">Сортировка:</span>
+      <span style="font-size:10px;color:var(--muted)">Сортування:</span>
       <select id="sortSelect" onchange="setSortFromSelect()" style="background:var(--sf);border:1px solid var(--bd);color:var(--text);padding:5px 8px;border-radius:6px;font-family:inherit;font-size:11px;cursor:pointer">
         <option value="ip-asc">IP ↑</option>
         <option value="ip-desc">IP ↓</option>
-        <option value="name-asc">Название ↑</option>
-        <option value="name-desc">Название ↓</option>
+        <option value="name-asc">Назва ↑</option>
+        <option value="name-desc">Назва ↓</option>
         <option value="status-asc">Статус (онлайн)</option>
         <option value="status-desc">Статус (оффлайн)</option>
-        <option value="latency-asc">Пинг ↑</option>
-        <option value="latency-desc">Пинг ↓</option>
+        <option value="latency-asc">Пінг ↑</option>
+        <option value="latency-desc">Пінг ↓</option>
         <option value="type-asc">Тип ↑</option>
       </select>
     </div>
@@ -168,12 +200,12 @@
   <!-- Header + controls -->
   <div class="panel" style="margin-bottom:14px">
     <div class="panel-hdr">
-      <h3>📈 SLA — Доступность устройств</h3>
+      <h3>📈 SLA — Доступность пристроїв</h3>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <span style="font-size:10px;color:var(--muted)">Период:</span>
-        <button id="slaPeriod1d"  class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="setSLAPeriod('1d')">24ч</button>
-        <button id="slaPeriod7d"  class="btn btn-acc"   style="font-size:11px;padding:4px 10px" onclick="setSLAPeriod('7d')">7 дней</button>
-        <button id="slaPeriod30d" class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="setSLAPeriod('30d')">30 дней</button>
+        <span style="font-size:10px;color:var(--muted)">Період:</span>
+        <button id="slaPeriod1d"  class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="setSLAPeriod('1d')">24г</button>
+        <button id="slaPeriod7d"  class="btn btn-acc"   style="font-size:11px;padding:4px 10px" onclick="setSLAPeriod('7d')">7 днів</button>
+        <button id="slaPeriod30d" class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="setSLAPeriod('30d')">30 днів</button>
         <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="loadSLA()">↻</button>
         <span style="font-size:11px;color:var(--muted)" id="slaNote"></span>
       </div>
@@ -181,22 +213,22 @@
 
     <!-- Summary cards -->
     <div class="stats" id="slaSummaryCards" style="margin:12px 0 0">
-      <div class="sc"><div class="sc-label">Средний uptime</div><div class="sc-val g" id="slaAvgUp">—</div></div>
-      <div class="sc"><div class="sc-label">≥ 99% устройств</div><div class="sc-val g" id="slaGreen">—</div></div>
+      <div class="sc"><div class="sc-label">Середній uptime</div><div class="sc-val g" id="slaAvgUp">—</div></div>
+      <div class="sc"><div class="sc-label">≥ 99% пристроїв</div><div class="sc-val g" id="slaGreen">—</div></div>
       <div class="sc"><div class="sc-label">95–99%</div><div class="sc-val y" id="slaYellow">—</div></div>
       <div class="sc"><div class="sc-label">&lt; 95%</div><div class="sc-val r" id="slaRed">—</div></div>
-      <div class="sc"><div class="sc-label">Нет данных</div><div class="sc-val t" id="slaNoData">—</div></div>
+      <div class="sc"><div class="sc-label">Немає даних</div><div class="sc-val t" id="slaNoData">—</div></div>
     </div>
   </div>
 
   <!-- Uptime chart for selected device -->
   <div class="panel" style="margin-bottom:14px">
     <div class="panel-hdr" style="margin-bottom:10px">
-      <h3>График доступности</h3>
+      <h3>Графік доступності</h3>
       <select id="slaChartDev" onchange="renderSLAChart()"
         style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
                padding:4px 8px;border-radius:5px;font-family:inherit;font-size:11px;max-width:260px">
-        <option value="">— выберите устройство —</option>
+        <option value="">— оберіть пристрій —</option>
       </select>
     </div>
     <div style="position:relative;height:120px"><canvas id="slaTimelineChart"></canvas></div>
@@ -205,9 +237,9 @@
   <!-- Detailed table -->
   <div class="panel" style="margin-bottom:0">
     <div class="panel-hdr" style="margin-bottom:10px">
-      <h3>Таблица SLA</h3>
+      <h3>Таблиця SLA</h3>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <input id="slaSearch" placeholder="Фильтр по имени/IP..."
+        <input id="slaSearch" placeholder="Фільтр по імені/IP..."
           style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
                  padding:5px 9px;border-radius:6px;font-family:inherit;font-size:11px;width:200px"
           oninput="renderSLATable()">
@@ -222,18 +254,18 @@
     <table id="slaTable" style="width:100%;border-collapse:collapse;font-size:11px">
       <thead>
         <tr id="slaTableHead" style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">
-          <th style="padding:5px 8px;text-align:left;font-weight:500;cursor:pointer" onclick="sortSLA('name')">Устройство ⇅</th>
+          <th style="padding:5px 8px;text-align:left;font-weight:500;cursor:pointer" onclick="sortSLA('name')">Пристрій ⇅</th>
           <th style="padding:5px 8px;text-align:left;font-weight:500">IP</th>
           <th style="padding:5px 8px;text-align:center;font-weight:500;cursor:pointer" onclick="sortSLA('uptime')">Uptime ⇅</th>
           <th style="padding:5px 8px;text-align:center;font-weight:500">Тренд</th>
-          <th style="padding:5px 8px;text-align:right;font-weight:500;cursor:pointer" onclick="sortSLA('avg_ms')">Ср. пинг ⇅</th>
-          <th style="padding:5px 8px;text-align:center;font-weight:500;cursor:pointer" onclick="sortSLA('incidents')">Инциденты ⇅</th>
-          <th style="padding:5px 8px;text-align:center;font-weight:500">Замеров</th>
-          <th style="padding:5px 8px;text-align:center;font-weight:500">Сейчас</th>
+          <th style="padding:5px 8px;text-align:right;font-weight:500;cursor:pointer" onclick="sortSLA('avg_ms')">Сер. пінг ⇅</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500;cursor:pointer" onclick="sortSLA('incidents')">Інциденти ⇅</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500">Замірів</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500">Зараз</th>
         </tr>
       </thead>
       <tbody id="slaTableBody">
-        <tr><td colspan="8" style="text-align:center;padding:30px;color:var(--muted)">Загрузка...</td></tr>
+        <tr><td colspan="8" style="text-align:center;padding:30px;color:var(--muted)">Завантаження...</td></tr>
       </tbody>
     </table>
     </div>
@@ -244,11 +276,11 @@
 <div class="tp" id="tab-dashboard">
   <!-- Summary cards -->
   <div class="stats" id="dashStats" style="margin-bottom:18px">
-    <div class="sc"><div class="sc-label">Всего устройств</div><div class="sc-val t" id="dashTotal">—</div></div>
-    <div class="sc"><div class="sc-label">Онлайн сейчас</div><div class="sc-val g" id="dashOnline">—</div></div>
-    <div class="sc"><div class="sc-label">Оффлайн</div><div class="sc-val r" id="dashOffline">—</div></div>
-    <div class="sc"><div class="sc-label">Средний uptime 24ч</div><div class="sc-val c" id="dashUptime">—</div></div>
-    <div class="sc"><div class="sc-label">Средний пинг 24ч</div><div class="sc-val t" id="dashAvgLat">—</div></div>
+    <div class="sc"><div class="sc-label">Всього пристроїв</div><div class="sc-val t" id="dashTotal">—</div></div>
+    <div class="sc"><div class="sc-label">Онлайн зараз</div><div class="sc-val g" id="dashOnline">—</div></div>
+    <div class="sc"><div class="sc-label">Офлайн</div><div class="sc-val r" id="dashOffline">—</div></div>
+    <div class="sc"><div class="sc-label">Середній uptime 24г</div><div class="sc-val c" id="dashUptime">—</div></div>
+    <div class="sc"><div class="sc-label">Середній пінг 24г</div><div class="sc-val t" id="dashAvgLat">—</div></div>
   </div>
 
   <!-- Top row: timeline + top-5 -->
@@ -256,16 +288,16 @@
     <!-- Down events timeline -->
     <div class="panel" style="margin:0">
       <div class="panel-hdr" style="margin-bottom:10px">
-        <h3>📉 Падения за 24 часа</h3>
-        <span class="panel-sub">по часам</span>
+        <h3>📉 Падіння за 24 години</h3>
+        <span class="panel-sub">по годинах</span>
       </div>
       <div style="position:relative;height:140px"><canvas id="dashTimelineChart"></canvas></div>
     </div>
     <!-- Top-5 latency -->
     <div class="panel" style="margin:0">
       <div class="panel-hdr" style="margin-bottom:10px">
-        <h3>🐢 Топ-5 по задержке</h3>
-        <span class="panel-sub">средний пинг 24ч</span>
+        <h3>🐢 Топ-5 за затримкою</h3>
+        <span class="panel-sub">середній пінг 24г</span>
       </div>
       <div style="position:relative;height:140px"><canvas id="dashTopLatChart"></canvas></div>
     </div>
@@ -274,7 +306,7 @@
   <!-- Uptime per device -->
   <div class="panel" style="margin-bottom:14px">
     <div class="panel-hdr" style="margin-bottom:12px">
-      <h3>✅ Uptime по устройствам — 24 часа</h3>
+      <h3>✅ Uptime по пристроях — 24 години</h3>
       <div style="display:flex;gap:8px;align-items:center">
         <span class="panel-sub" id="dashUptimeNote"></span>
         <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="loadDashboard()">↻</button>
@@ -286,10 +318,10 @@
   <!-- Ping history per device -->
   <div class="panel" style="margin-bottom:0">
     <div class="panel-hdr" style="margin-bottom:10px">
-      <h3>📈 История пинга — 24 часа</h3>
+      <h3>📈 Історія пінгу — 24 години</h3>
       <div style="display:flex;gap:8px;align-items:center">
         <select id="dashDevSelect" onchange="renderDashPingChart()" style="background:var(--sf);border:1px solid var(--bd);color:var(--text);padding:4px 8px;border-radius:5px;font-family:inherit;font-size:11px">
-          <option value="">— выберите устройство —</option>
+          <option value="">— оберіть пристрій —</option>
         </select>
       </div>
     </div>
@@ -301,35 +333,35 @@
 <div class="tp" id="tab-events">
   <div class="panel">
     <div class="panel-hdr">
-      <h3>📋 Журнал событий</h3>
+      <h3>📋 Журнал подій</h3>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <span class="panel-sub" id="evCount">—</span>
-        <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="fetchEvents()">↻ Обновить</button>
-        <button class="btn btn-del" style="font-size:11px;padding:4px 10px" onclick="clearEvents()">🗑 Очистить</button>
+        <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="fetchEvents()">↻ Оновити</button>
+        <button class="btn btn-del" style="font-size:11px;padding:4px 10px" onclick="clearEvents()">🗑 Очистити</button>
       </div>
     </div>
     <div class="ev-filter-bar">
       <span style="font-size:10px;color:var(--muted)">Фильтр:</span>
-      <button class="fbtn active" onclick="setEvFilter('all',this)">Все</button>
+      <button class="fbtn active" onclick="setEvFilter('all',this)">Всі</button>
       <button class="fbtn" onclick="setEvFilter('power_off',this)">⚡ Свет</button>
       <button class="fbtn" onclick="setEvFilter('down',this)">🔴 Упали</button>
       <button class="fbtn" onclick="setEvFilter('up',this)">🟢 Встали</button>
       <button class="fbtn" onclick="setEvFilter('reboot',this)">🔄 Ребут</button>
-      <button class="fbtn" onclick="setEvFilter('new_host',this)">🆕 Новые</button>
+      <button class="fbtn" onclick="setEvFilter('new_host',this)">🆕 Нові</button>
     </div>
 
     <!-- Test panel -->
     <div id="evTestPanel" style="margin-bottom:12px;padding:10px 13px;background:var(--sf2);border:1px solid var(--bd);border-radius:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <span style="font-size:10px;color:var(--muted);font-weight:700">🧪 Тест событий:</span>
+      <span style="font-size:10px;color:var(--muted);font-weight:700">🧪 Тест подій:</span>
       <select id="evTestIp" style="background:var(--sf);border:1px solid var(--bd);color:var(--text);padding:4px 8px;border-radius:5px;font-family:inherit;font-size:11px;max-width:220px">
-        <option value="">— выберите устройство —</option>
+        <option value="">— оберіть пристрій —</option>
       </select>
-      <button class="btn-reboot" style="font-size:10px;padding:4px 10px;border-radius:5px;border:1px solid #ff3d5760;cursor:pointer;font-family:inherit;font-weight:700;color:var(--red);background:var(--rd)" onclick="testEvent('down')">⬇ Симулировать DOWN</button>
-      <button class="btn-ping"   style="font-size:10px;padding:4px 10px;border-radius:5px;border:1px solid #00d4ff40;cursor:pointer;font-family:inherit;font-weight:700;color:var(--cyan);background:var(--cyd)" onclick="testEvent('up')">⬆ Симулировать UP</button>
+      <button class="btn-reboot" style="font-size:10px;padding:4px 10px;border-radius:5px;border:1px solid #ff3d5760;cursor:pointer;font-family:inherit;font-weight:700;color:var(--red);background:var(--rd)" onclick="testEvent('down')">⬇ Симулювати DOWN</button>
+      <button class="btn-ping"   style="font-size:10px;padding:4px 10px;border-radius:5px;border:1px solid #00d4ff40;cursor:pointer;font-family:inherit;font-weight:700;color:var(--cyan);background:var(--cyd)" onclick="testEvent('up')">⬆ Симулювати UP</button>
       <span id="evTestStatus" style="font-size:10px;color:var(--muted)"></span>
     </div>
 
-    <div id="evList"><div class="ev-empty">Загрузка...</div></div>
+    <div id="evList"><div class="ev-empty">Завантаження...</div></div>
   </div>
 </div>
 
@@ -344,13 +376,13 @@
         <select id="mtDevSel" onchange="mtSelectDevice()"
           style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
                  padding:5px 9px;border-radius:6px;font-family:inherit;font-size:11px;max-width:280px">
-          <option value="">— выберите роутер —</option>
+          <option value="">— оберіть роутер —</option>
         </select>
         <button class="btn btn-acc" style="font-size:11px;padding:5px 12px" onclick="mtConnect()">
-          🔌 Подключить
+          🔌 Підключити
         </button>
         <button class="btn btn-ghost" style="font-size:10px;padding:4px 9px"
-          onclick="mtOpenDeviceCard()">✏️ Логин/пароль</button>
+          onclick="mtOpenDeviceCard()">✏️ Логін/пароль</button>
         <span id="mtConnStatus" style="font-size:11px;color:var(--muted);max-width:500px"></span>
       </div>
     </div>
@@ -391,29 +423,29 @@
       <!-- Active sessions -->
       <div class="panel" style="margin:0">
         <div class="panel-hdr" style="margin-bottom:10px">
-          <h3>Активные сессии</h3>
+          <h3>Активні сесії</h3>
           <button class="btn btn-ghost" style="font-size:10px;padding:3px 9px" onclick="mtLoadHotspot()">↻</button>
         </div>
         <div id="mtSessions" style="display:flex;flex-direction:column;gap:4px;max-height:320px;overflow-y:auto">
-          <div style="color:var(--muted);font-size:11px">Нажмите «Подключить»</div>
+          <div style="color:var(--muted);font-size:11px">Натисніть «Підключити»</div>
         </div>
       </div>
 
       <!-- Users -->
       <div class="panel" style="margin:0">
         <div class="panel-hdr" style="margin-bottom:10px">
-          <h3>Пользователи</h3>
+          <h3>Користувачі</h3>
           <button class="btn btn-ghost" style="font-size:10px;padding:3px 9px" onclick="mtLoadHotspot()">↻</button>
         </div>
         <div id="mtUsers" style="display:flex;flex-direction:column;gap:4px;max-height:240px;overflow-y:auto;margin-bottom:12px">
-          <div style="color:var(--muted);font-size:11px">Нажмите «Подключить»</div>
+          <div style="color:var(--muted);font-size:11px">Натисніть «Підключити»</div>
         </div>
 
         <!-- Add user form -->
         <div style="border-top:1px solid var(--bd);padding-top:10px">
-          <div style="font-size:10px;color:var(--muted);margin-bottom:7px;text-transform:uppercase;letter-spacing:.8px">Добавить пользователя</div>
+          <div style="font-size:10px;color:var(--muted);margin-bottom:7px;text-transform:uppercase;letter-spacing:.8px">Додати користувача</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
-            <input id="mtNewUser" placeholder="Логин"
+            <input id="mtNewUser" placeholder="Логін"
               style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
                      padding:6px 9px;border-radius:6px;font-family:inherit;font-size:11px">
             <input id="mtNewPass" placeholder="Пароль" type="password"
@@ -429,7 +461,7 @@
             </select>
           </div>
           <div style="display:flex;gap:7px;align-items:center">
-            <button class="btn btn-acc" style="font-size:11px;padding:5px 12px" onclick="mtAddUser()">+ Добавить</button>
+            <button class="btn btn-acc" style="font-size:11px;padding:5px 12px" onclick="mtAddUser()">+ Додати</button>
             <span id="mtUserStatus" style="font-size:11px;color:var(--muted)"></span>
           </div>
         </div>
@@ -448,7 +480,7 @@
           <button class="btn btn-ghost" style="font-size:10px;padding:3px 9px" onclick="mtLoadFirewall()">↻</button>
         </div>
         <div id="mtFwRules" style="max-height:400px;overflow-y:auto;font-size:11px">
-          <div style="color:var(--muted)">Нажмите «Подключить»</div>
+          <div style="color:var(--muted)">Натисніть «Підключити»</div>
         </div>
       </div>
 
@@ -461,7 +493,7 @@
 
         <!-- Quick block -->
         <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
-          <input id="mtBlockIp" placeholder="IP для блокировки"
+          <input id="mtBlockIp" placeholder="IP для блокування"
             style="flex:1;min-width:130px;background:var(--sf2);border:1px solid var(--bd);
                    color:var(--text);padding:6px 9px;border-radius:6px;font-family:inherit;font-size:11px">
           <select id="mtBlockList"
@@ -469,10 +501,10 @@
                    padding:6px 9px;border-radius:6px;font-family:inherit;font-size:11px">
             <option>blacklist</option><option>blocked</option><option>drop-list</option>
           </select>
-          <button class="btn btn-del" style="font-size:11px;padding:5px 10px" onclick="mtBlockIP()">🚫 Заблокировать</button>
+          <button class="btn btn-del" style="font-size:11px;padding:5px 10px" onclick="mtBlockIP()">🚫 Заблокувати</button>
         </div>
         <div id="mtAddrList" style="max-height:320px;overflow-y:auto;font-size:11px">
-          <div style="color:var(--muted)">Нажмите «Подключить»</div>
+          <div style="color:var(--muted)">Натисніть «Підключити»</div>
         </div>
       </div>
     </div>
@@ -482,9 +514,9 @@
   <div id="mt-dhcp" class="mt-panel" style="display:none">
     <div class="panel" style="margin:0">
       <div class="panel-hdr" style="margin-bottom:10px">
-        <h3>DHCP лизы</h3>
+        <h3>DHCP оренди</h3>
         <div style="display:flex;gap:8px">
-          <input id="mtDhcpSearch" placeholder="Поиск MAC/IP/hostname..."
+          <input id="mtDhcpSearch" placeholder="Пошук MAC/IP/hostname..."
             style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
                    padding:5px 9px;border-radius:6px;font-family:inherit;font-size:11px;width:220px"
             oninput="mtFilterDhcp()">
@@ -496,16 +528,16 @@
         <thead>
           <tr style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">
             <th style="padding:5px 8px;text-align:left;font-weight:500">MAC</th>
-            <th style="padding:5px 8px;text-align:left;font-weight:500">IP адрес</th>
+            <th style="padding:5px 8px;text-align:left;font-weight:500">IP адреса</th>
             <th style="padding:5px 8px;text-align:left;font-weight:500">Hostname</th>
             <th style="padding:5px 8px;text-align:left;font-weight:500">Тип</th>
             <th style="padding:5px 8px;text-align:left;font-weight:500">Сервер</th>
-            <th style="padding:5px 8px;text-align:left;font-weight:500">Истекает</th>
-            <th style="padding:5px 8px;text-align:center;font-weight:500">Действия</th>
+            <th style="padding:5px 8px;text-align:left;font-weight:500">Спливає</th>
+            <th style="padding:5px 8px;text-align:center;font-weight:500">Дії</th>
           </tr>
         </thead>
         <tbody id="mtDhcpBody">
-          <tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted)">Нажмите «Подключить»</td></tr>
+          <tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted)">Натисніть «Підключити»</td></tr>
         </tbody>
       </table>
       </div>
@@ -518,11 +550,11 @@
       <div class="panel-hdr" style="margin-bottom:10px">
         <h3>Syslog receiver</h3>
         <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
-          <span id="mtSyslogStatus" style="font-size:11px;color:var(--muted)">не запущен</span>
+          <span id="mtSyslogStatus" style="font-size:11px;color:var(--muted)">не запущено</span>
           <input id="mtSyslogPort" value="514" type="number"
             style="width:70px;background:var(--sf2);border:1px solid var(--bd);color:var(--text);
                    padding:4px 7px;border-radius:5px;font-family:inherit;font-size:11px">
-          <button class="btn btn-g" style="font-size:10px;padding:4px 10px" onclick="mtSyslogStart()">▶ Запустить</button>
+          <button class="btn btn-g" style="font-size:10px;padding:4px 10px" onclick="mtSyslogStart()">▶ Запустити</button>
           <button class="btn btn-ghost" style="font-size:10px;padding:4px 10px" onclick="mtSyslogStop()">■ Стоп</button>
           <button class="btn btn-ghost" style="font-size:10px;padding:4px 10px" onclick="mtLoadSyslog()">↻</button>
           <button class="btn btn-del" style="font-size:10px;padding:4px 10px" onclick="mtSyslogClear()">🗑</button>
@@ -530,18 +562,18 @@
       </div>
       <!-- Filters -->
       <div style="display:flex;gap:7px;margin-bottom:10px;flex-wrap:wrap">
-        <input id="mtSyslogSearch" placeholder="Поиск..."
+        <input id="mtSyslogSearch" placeholder="Пошук..."
           style="flex:1;min-width:150px;background:var(--sf2);border:1px solid var(--bd);color:var(--text);
                  padding:5px 9px;border-radius:6px;font-family:inherit;font-size:11px"
           oninput="mtLoadSyslog()">
         <select id="mtSyslogTopic" onchange="mtLoadSyslog()"
           style="background:var(--sf2);border:1px solid var(--bd);color:var(--text);
                  padding:5px 9px;border-radius:6px;font-family:inherit;font-size:11px">
-          <option value="">Все темы</option>
+          <option value="">Всі теми</option>
           <option>firewall</option><option>dhcp</option><option>hotspot</option>
           <option>wireless</option><option>system</option><option>ppp</option>
         </select>
-        <input id="mtSyslogSrc" placeholder="IP источника"
+        <input id="mtSyslogSrc" placeholder="IP джерела"
           style="width:140px;background:var(--sf2);border:1px solid var(--bd);color:var(--text);
                  padding:5px 9px;border-radius:6px;font-family:inherit;font-size:11px"
           oninput="mtLoadSyslog()">
@@ -555,7 +587,7 @@
       <!-- Log entries -->
       <div id="mtSyslogEntries" style="display:flex;flex-direction:column;gap:2px;
            max-height:420px;overflow-y:auto;font-family:'JetBrains Mono',monospace;font-size:11px">
-        <div style="color:var(--muted)">Запустите приём и настройте отправку логов с MikroTik</div>
+        <div style="color:var(--muted)">Запустіть приймання та налаштуйте відправку логів з MikroTik</div>
       </div>
     </div>
   </div>
@@ -567,41 +599,41 @@
 
   <!-- Telegram -->
   <div class="panel">
-    <div class="panel-hdr"><h3>🤖 Telegram уведомления</h3></div>
+    <div class="panel-hdr"><h3>🤖 Telegram сповіщення</h3></div>
     <div class="tg-form">
       <div class="tg-row" style="grid-column:1/-1">
         <label class="tg-label">Bot Token</label>
         <input class="tg-inp" id="tgToken" type="password" placeholder="1234567890:AABBccDDee..." autocomplete="off">
       </div>
       <div class="tg-row">
-        <label class="tg-label">Порог оповещения</label>
+        <label class="tg-label">Поріг сповіщення</label>
         <div style="display:flex;align-items:center;gap:7px">
           <input class="tg-inp" id="tgDownMin" type="number" min="1" max="60" value="5" style="width:70px">
-          <span style="font-size:11px;color:var(--muted)">мин</span>
+          <span style="font-size:11px;color:var(--muted)">хв</span>
         </div>
       </div>
       <div class="tg-row">
-        <label class="tg-label">Уведомлять о:</label>
+        <label class="tg-label">Сповіщати про:</label>
         <div style="display:flex;flex-direction:column;gap:7px;margin-top:4px">
-          <label class="tg-toggle"><input type="checkbox" id="tgPower" checked> ⚡ Свет отключён / восстановлен</label>
-          <label class="tg-toggle"><input type="checkbox" id="tgDevice" checked> 🔴 Устройство недоступно N мин</label>
-          <label class="tg-toggle"><input type="checkbox" id="tgHost"   checked> 🆕 Новый незарег. хост</label>
+          <label class="tg-toggle"><input type="checkbox" id="tgPower" checked> ⚡ Світло відключено / відновлено</label>
+          <label class="tg-toggle"><input type="checkbox" id="tgDevice" checked> 🔴 Пристрій недоступний N хв</label>
+          <label class="tg-toggle"><input type="checkbox" id="tgHost"   checked> 🆕 Новий незарег. хост</label>
         </div>
       </div>
       <div class="tg-row" style="grid-column:1/-1">
-        <label class="tg-toggle" style="font-size:13px"><input type="checkbox" id="tgEnabled"> <b>Включить уведомления</b></label>
+        <label class="tg-toggle" style="font-size:13px"><input type="checkbox" id="tgEnabled"> <b>Увімкнути сповіщення</b></label>
       </div>
     </div>
     <div style="display:flex;gap:9px;margin-top:14px;flex-wrap:wrap;align-items:center">
-      <button class="btn btn-acc" onclick="saveTg()">💾 Сохранить настройки</button>
+      <button class="btn btn-acc" onclick="saveTg()">💾 Зберегти налаштування</button>
       <span id="tgStatus"></span>
     </div>
     <div class="divider"></div>
 
     <!-- Recipients list -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-      <span style="font-size:12px;font-weight:700">📬 Получатели</span>
-      <span style="font-size:10px;color:var(--muted)">Бот отправляет всем активным</span>
+      <span style="font-size:12px;font-weight:700">📬 Отримувачі</span>
+      <span style="font-size:10px;color:var(--muted)">Бвід надсилає всім активним</span>
     </div>
     <div id="recipientList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px"></div>
     <!-- Add recipient form -->
@@ -611,16 +643,16 @@
         <input class="tg-inp" id="newChatId" placeholder="-1001234567890">
       </div>
       <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:110px">
-        <label class="tg-label">Метка (необяз.)</label>
-        <input class="tg-inp" id="newChatLabel" placeholder="Иван, #alerts...">
+        <label class="tg-label">Мітка (необов.)</label>
+        <input class="tg-inp" id="newChatLabel" placeholder="Іван, #alerts...">
       </div>
-      <button class="btn btn-acc" style="padding:9px 14px;white-space:nowrap" onclick="addRecipient()">+ Добавить</button>
+      <button class="btn btn-acc" style="padding:9px 14px;white-space:nowrap" onclick="addRecipient()">+ Додати</button>
     </div>
     <div class="divider"></div>
     <div class="hint" style="line-height:1.9">
-      <b>Как настроить:</b><br>
+      <b>Як налаштувати:</b><br>
       1. <code>@BotFather</code> → <code>/newbot</code> → токен<br>
-      2. Добавьте бота в чат/канал, дайте права администратора<br>
+      2. Добавьте бвіда в чат/канал, дайте права адхвистратора<br>
       3. Chat ID: <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>
     </div>
   </div>
@@ -628,7 +660,7 @@
   <!-- Discord -->
   <div class="panel">
     <div class="panel-hdr">
-      <h3>🎮 Discord уведомления</h3>
+      <h3>🎮 Discord сповіщення</h3>
       <span id="discordStatus" class="panel-sub"></span>
     </div>
     <div class="tg-form">
@@ -637,19 +669,19 @@
         <input class="tg-inp" id="discordUrl" type="password" placeholder="https://discord.com/api/webhooks/...">
       </div>
       <div class="tg-row">
-        <label class="tg-label">Уведомлять о:</label>
+        <label class="tg-label">Сповіщати про:</label>
         <div style="display:flex;flex-direction:column;gap:7px;margin-top:4px">
           <label class="tg-toggle"><input type="checkbox" id="discordPower" checked> ⚡ Свет</label>
-          <label class="tg-toggle"><input type="checkbox" id="discordDevice" checked> 🔴 Устройство недоступно</label>
-          <label class="tg-toggle"><input type="checkbox" id="discordHost" checked> 🆕 Новый хост</label>
+          <label class="tg-toggle"><input type="checkbox" id="discordDevice" checked> 🔴 Пристрій недоступно</label>
+          <label class="tg-toggle"><input type="checkbox" id="discordHost" checked> 🆕 Новий хост</label>
         </div>
       </div>
       <div class="tg-row" style="grid-column:1/-1">
-        <label class="tg-toggle" style="font-size:13px"><input type="checkbox" id="discordEnabled"> <b>Включить</b></label>
+        <label class="tg-toggle" style="font-size:13px"><input type="checkbox" id="discordEnabled"> <b>Увімкнути</b></label>
       </div>
     </div>
     <div style="display:flex;gap:9px;margin-top:14px;flex-wrap:wrap">
-      <button class="btn btn-acc" onclick="saveDiscord()">💾 Сохранить</button>
+      <button class="btn btn-acc" onclick="saveDiscord()">💾 Зберегти</button>
       <button class="btn btn-ghost" style="font-size:11px" onclick="testDiscord()">📨 Тест</button>
       <span id="discordTestStatus" style="font-size:11px;color:var(--muted)"></span>
     </div>
@@ -658,7 +690,7 @@
   <!-- Email -->
   <div class="panel">
     <div class="panel-hdr">
-      <h3>📧 Email уведомления</h3>
+      <h3>📧 Email сповіщення</h3>
       <span id="emailStatus" class="panel-sub"></span>
     </div>
     <div class="tg-form">
@@ -671,7 +703,7 @@
         <input class="tg-inp" id="smtpPort" type="number" value="587" style="width:80px">
       </div>
       <div class="tg-row">
-        <label class="tg-label">Логин</label>
+        <label class="tg-label">Логін</label>
         <input class="tg-inp" id="smtpUser" placeholder="user@gmail.com" autocomplete="off">
       </div>
       <div class="tg-row">
@@ -679,7 +711,7 @@
         <input class="tg-inp" id="smtpPass" type="password" autocomplete="new-password">
       </div>
       <div class="tg-row">
-        <label class="tg-label">От кого</label>
+        <label class="tg-label">Від кого</label>
         <input class="tg-inp" id="smtpFrom" placeholder="netwatch@gmail.com">
       </div>
       <div class="tg-row">
@@ -690,25 +722,25 @@
         <label class="tg-toggle"><input type="checkbox" id="smtpTls" checked> STARTTLS</label>
       </div>
       <div class="tg-row" style="grid-column:1/-1">
-        <label class="tg-toggle" style="font-size:13px"><input type="checkbox" id="emailEnabled"> <b>Включить</b></label>
+        <label class="tg-toggle" style="font-size:13px"><input type="checkbox" id="emailEnabled"> <b>Увімкнути</b></label>
       </div>
     </div>
     <div style="display:flex;gap:9px;margin-top:14px;flex-wrap:wrap">
-      <button class="btn btn-acc" onclick="saveEmail()">💾 Сохранить</button>
+      <button class="btn btn-acc" onclick="saveEmail()">💾 Зберегти</button>
       <button class="btn btn-ghost" style="font-size:11px" onclick="testEmail()">📨 Тест</button>
       <span id="emailTestStatus" style="font-size:11px;color:var(--muted)"></span>
     </div>
     <div class="hint" style="margin-top:12px;line-height:1.9">
-      <b>Gmail:</b> Включить двухэтапную аутентификацию → Пароли приложений → создать App password.<br>
-      <b>Порт 587</b> = STARTTLS (рекомендуется) · <b>Порт 465</b> = SSL (отключите STARTTLS)
+      <b>Gmail:</b> Увімкнути двоетапну автентифікацію → Пароли приложений → создать App password.<br>
+      <b>Порт 587</b> = STARTTLS (рекомендуется) · <b>Порт 465</b> = SSL (відключите STARTTLS)
     </div>
   </div>
 
   <!-- Webhook -->
   <div class="panel">
     <div class="panel-hdr">
-      <h3>🔗 Webhook уведомления</h3>
-      <span class="panel-sub">n8n · Zapier · Home Assistant · любой сервис</span>
+      <h3>🔗 Webhook сповіщення</h3>
+      <span class="panel-sub">n8n · Zapier · Home Assistant · будь-який сервіс</span>
     </div>
     <div class="tg-form">
       <div class="tg-row" style="grid-column:1/-1">
@@ -716,19 +748,19 @@
         <input class="tg-inp" id="webhookUrl" placeholder="https://n8n.example.com/webhook/...">
       </div>
       <div class="tg-row">
-        <label class="tg-label">Уведомлять о:</label>
+        <label class="tg-label">Сповіщати про:</label>
         <div style="display:flex;flex-direction:column;gap:7px;margin-top:4px">
           <label class="tg-toggle"><input type="checkbox" id="webhookPower" checked> ⚡ Свет</label>
-          <label class="tg-toggle"><input type="checkbox" id="webhookDevice" checked> 🔴 Устройство</label>
-          <label class="tg-toggle"><input type="checkbox" id="webhookHost" checked> 🆕 Новый хост</label>
+          <label class="tg-toggle"><input type="checkbox" id="webhookDevice" checked> 🔴 Пристрій</label>
+          <label class="tg-toggle"><input type="checkbox" id="webhookHost" checked> 🆕 Новий хост</label>
         </div>
       </div>
       <div class="tg-row" style="grid-column:1/-1">
-        <label class="tg-toggle" style="font-size:13px"><input type="checkbox" id="webhookEnabled"> <b>Включить</b></label>
+        <label class="tg-toggle" style="font-size:13px"><input type="checkbox" id="webhookEnabled"> <b>Увімкнути</b></label>
       </div>
     </div>
     <div style="display:flex;gap:9px;margin-top:14px;flex-wrap:wrap">
-      <button class="btn btn-acc" onclick="saveWebhook()">💾 Сохранить</button>
+      <button class="btn btn-acc" onclick="saveWebhook()">💾 Зберегти</button>
       <button class="btn btn-ghost" style="font-size:11px" onclick="testWebhook()">📨 Тест</button>
       <span id="webhookTestStatus" style="font-size:11px;color:var(--muted)"></span>
     </div>
@@ -737,16 +769,16 @@
 
   <!-- Sound -->
   <div class="panel">
-    <div class="panel-hdr"><h3>🔔 Звуковые уведомления</h3></div>
+    <div class="panel-hdr"><h3>🔔 Звукові сповіщення</h3></div>
     <div style="display:flex;flex-direction:column;gap:10px">
-      <label class="tg-toggle" style="font-size:13px"><input type="checkbox" id="soundEnabled" onchange="saveSoundSettings()"> <b>Звук при падении устройства</b></label>
-      <label class="tg-toggle"><input type="checkbox" id="soundUp" onchange="saveSoundSettings()"> 🟢 Звук при восстановлении</label>
+      <label class="tg-toggle" style="font-size:13px"><input type="checkbox" id="soundEnabled" onchange="saveSoundSettings()"> <b>Звук при падінні пристрою</b></label>
+      <label class="tg-toggle"><input type="checkbox" id="soundUp" onchange="saveSoundSettings()"> 🟢 Звук при відновленні</label>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <span class="tg-label">Громкость:</span>
+        <span class="tg-label">Гучність:</span>
         <input type="range" id="soundVolume" min="0" max="100" value="50" style="width:120px" oninput="saveSoundSettings();document.getElementById('soundVolLbl').textContent=this.value+'%'">
         <span id="soundVolLbl" style="font-size:11px;color:var(--muted)">50%</span>
-        <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="playTestSound('down')">▶ Тест «упал»</button>
-        <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="playTestSound('up')">▶ Тест «встал»</button>
+        <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="playTestSound('down')">▶ Тест «впав»</button>
+        <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="playTestSound('up')">▶ Тест «піднявся»</button>
       </div>
     </div>
   </div>
@@ -754,14 +786,14 @@
   <!-- Backup -->
   <div class="panel">
     <div class="panel-hdr">
-      <h3>💾 Резервные копии</h3>
-      <span class="panel-sub">авто-бэкап каждые 24ч · последние 30</span>
+      <h3>💾 Резервні копії</h3>
+      <span class="panel-sub">авто-резерв кожні 24г · останні 30</span>
     </div>
     <div style="display:flex;gap:9px;margin-bottom:14px;flex-wrap:wrap">
-      <button class="btn btn-acc" onclick="createBackup()">⬇ Создать сейчас</button>
-      <button class="btn btn-ghost" style="font-size:11px" onclick="loadBackupList()">↻ Обновить список</button>
-      <a class="btn btn-ghost" style="font-size:11px;padding:6px 12px;text-decoration:none" href="/api/export/devices.csv" download>📋 Экспорт устройств CSV</a>
-      <a class="btn btn-ghost" style="font-size:11px;padding:6px 12px;text-decoration:none" href="/api/export/events.csv" download>📋 Экспорт событий CSV</a>
+      <button class="btn btn-acc" onclick="createBackup()">⬇ Створити зараз</button>
+      <button class="btn btn-ghost" style="font-size:11px" onclick="loadBackupList()">↻ Оновити список</button>
+      <a class="btn btn-ghost" style="font-size:11px;padding:6px 12px;text-decoration:none" href="/api/export/devices.csv" download>📋 Експорт пристроїв CSV</a>
+      <a class="btn btn-ghost" style="font-size:11px;padding:6px 12px;text-decoration:none" href="/api/export/events.csv" download>📋 Експорт подій CSV</a>
       <span id="backupStatus" style="font-size:11px;color:var(--muted)"></span>
     </div>
     <div id="backupList" style="display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto"></div>
@@ -770,33 +802,33 @@
   <!-- Audit log -->
   <div class="panel">
     <div class="panel-hdr">
-      <h3>📒 Журнал аудита</h3>
+      <h3>📒 Журнал аудиту</h3>
       <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="loadAudit()">↻</button>
     </div>
     <div id="auditList" style="display:flex;flex-direction:column;gap:3px;max-height:260px;overflow-y:auto;font-size:11px;font-family:'JetBrains Mono',monospace">
-      <div style="color:var(--muted)">Нажмите ↻ для загрузки</div>
+      <div style="color:var(--muted)">Натисніть ↻ для завантаження</div>
     </div>
   </div>
 
   <!-- Auth settings -->
   <div class="panel">
-    <div class="panel-hdr"><h3>🔐 Авторизация</h3></div>
+    <div class="panel-hdr"><h3>🔐 Авторзація</h3></div>
     <div class="tg-form">
       <div class="tg-row">
-        <label class="tg-label">Новый логин</label>
+        <label class="tg-label">Новий логін</label>
         <input class="tg-inp" id="newUsername" placeholder="admin" autocomplete="off">
       </div>
       <div class="tg-row">
-        <label class="tg-label">Новый пароль</label>
+        <label class="tg-label">Новий пароль</label>
         <input class="tg-inp" id="newPassword" type="password" placeholder="••••••••" autocomplete="new-password">
       </div>
       <div class="tg-row">
-        <label class="tg-label">Повторите пароль</label>
+        <label class="tg-label">Повторіть пароль</label>
         <input class="tg-inp" id="newPassword2" type="password" placeholder="••••••••" autocomplete="new-password">
       </div>
     </div>
     <div style="display:flex;gap:9px;margin-top:14px;align-items:center;flex-wrap:wrap">
-      <button class="btn btn-acc" onclick="changeAuth()">💾 Сменить</button>
+      <button class="btn btn-acc" onclick="changeAuth()">💾 Змінити</button>
       <span id="authStatus"></span>
     </div>
   </div>
@@ -804,27 +836,27 @@
   <!-- 2FA -->
   <div class="panel">
     <div class="panel-hdr">
-      <h3>📱 Двухфакторная аутентификация</h3>
+      <h3>📱 Двофакторна автентифікація</h3>
       <span id="fa2StatusBadge" class="panel-sub">загрузка...</span>
     </div>
 
     <!-- Status: disabled -->
     <div id="fa2Disabled">
       <p class="hint" style="margin-bottom:14px;line-height:1.8">
-        2FA добавляет второй уровень защиты. После входа с паролем потребуется
-        ввести код из приложения <b>Google Authenticator</b> или <b>Authy</b>.
+        2FA добавляет другий рівень захисту. Після входу з паролем пвідребуется
+        ввести код з приложения <b>Google Authenticator</b> або <b>Authy</b>.
       </p>
       <button class="btn btn-acc" style="max-width:220px" onclick="fa2StartSetup()">
-        🔐 Включить 2FA
+        🔐 Увімкнути 2FA
       </button>
     </div>
 
     <!-- Setup: QR code step -->
     <div id="fa2Setup" style="display:none">
       <p style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.7">
-        <b>Шаг 1.</b> Откройте Google Authenticator или Authy.<br>
-        <b>Шаг 2.</b> Нажмите «+» → «Сканировать QR-код» и отсканируйте код ниже.<br>
-        <b>Шаг 3.</b> Введите 6-значный код из приложения для подтверждения.
+        <b>Крок 1.</b> Відкрийте Google Authenticator або Authy.<br>
+        <b>Крок 2.</b> Натисніть «+» → «Сканувати QR-код» и відсканируйте код ниже.<br>
+        <b>Крок 3.</b> Введіть 6-значний код з додатку для підтвердження.
       </p>
       <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start">
         <!-- QR code (rendered via JS into canvas) -->
@@ -834,12 +866,12 @@
           <div style="font-size:9px;color:var(--muted);margin-top:6px;text-align:center">QR-код</div>
         </div>
         <div style="flex:1;min-width:180px">
-          <div style="font-size:10px;color:var(--muted);margin-bottom:4px">Или введите секрет вручную:</div>
+          <div style="font-size:10px;color:var(--muted);margin-bottom:4px">Або введіть секрет вручну:</div>
           <div id="fa2SecretDisplay"
             style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;
                    letter-spacing:2px;background:var(--sf2);padding:8px 12px;border-radius:6px;
                    border:1px solid var(--bd);word-break:break-all;margin-bottom:14px"></div>
-          <div style="font-size:10px;color:var(--muted);margin-bottom:6px">Код подтверждения:</div>
+          <div style="font-size:10px;color:var(--muted);margin-bottom:6px">Код підтвердження:</div>
           <input id="fa2ConfirmCode" type="text" inputmode="numeric" maxlength="6"
             placeholder="000000"
             style="font-size:18px;letter-spacing:5px;text-align:center;font-weight:700;
@@ -848,8 +880,8 @@
             oninput="this.value=this.value.replace(/\D/g,'')"
             onkeydown="if(event.key==='Enter')fa2Confirm()">
           <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-            <button class="btn btn-acc" style="max-width:180px" onclick="fa2Confirm()">✓ Подтвердить</button>
-            <button class="btn btn-ghost" style="max-width:120px;font-size:11px" onclick="fa2CancelSetup()">Отмена</button>
+            <button class="btn btn-acc" style="max-width:180px" onclick="fa2Confirm()">✓ Підтвердити</button>
+            <button class="btn btn-ghost" style="max-width:120px;font-size:11px" onclick="fa2CancelSetup()">Скасування</button>
           </div>
           <span id="fa2SetupStatus" style="font-size:11px;color:var(--muted);display:block;margin-top:8px"></span>
         </div>
@@ -862,12 +894,12 @@
                   padding:10px 14px;background:var(--gd);border:1px solid #00e67630;border-radius:8px">
         <span style="font-size:20px">🛡</span>
         <div>
-          <div style="font-size:13px;font-weight:700;color:var(--green)">2FA включена</div>
-          <div style="font-size:10px;color:var(--muted)">Вход требует код из аутентификатора</div>
+          <div style="font-size:13px;font-weight:700;color:var(--green)">2FA увімкнена</div>
+          <div style="font-size:10px;color:var(--muted)">Вхід вимагає код з автентифікатора</div>
         </div>
       </div>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">
-        Для отключения введите текущий код из приложения:
+        Для відключення введіть пвідочний код з додатку:
       </p>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <input id="fa2DisableCode" type="text" inputmode="numeric" maxlength="6"
@@ -877,7 +909,7 @@
                  padding:8px 12px;border-radius:7px;font-family:inherit;width:140px;outline:none"
           oninput="this.value=this.value.replace(/\D/g,'')">
         <button class="btn btn-del" style="max-width:160px;font-size:12px" onclick="fa2Disable()">
-          🔓 Отключить 2FA
+          🔓 Відключити 2FA
         </button>
         <span id="fa2DisableStatus" style="font-size:11px;color:var(--muted)"></span>
       </div>
@@ -886,25 +918,25 @@
 
   <!-- Power IP -->
   <div class="panel">
-    <div class="panel-hdr"><h3>⚡ Индикатор питания</h3></div>
+    <div class="panel-hdr"><h3>⚡ Індикатор живлення</h3></div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <label class="tg-label" style="white-space:nowrap">IP шлюза:</label>
+      <label class="tg-label" style="white-space:nowrap">IP шлюзу:</label>
       <input class="tg-inp" id="powerIpInp" style="max-width:180px" placeholder="192.168.88.1">
-      <button class="btn btn-acc" onclick="savePowerIp()">Сохранить</button>
+      <button class="btn btn-acc" onclick="savePowerIp()">Зберегти</button>
     </div>
-    <p class="hint" style="margin-top:10px">Если этот IP не пингуется — баннер покажет «НЕТ СВЕТА».</p>
+    <p class="hint" style="margin-top:10px">Якщо цей IP не пінгується — банер покаже «НЕМАЄ СВІТЛА».</p>
   </div>
 </div>
 
 <!-- ════ TAB: DISCOVERY ════ -->
 <div class="tp" id="tab-discovery">
   <div class="disc-ctrl">
-    <h3>🔍 Сканер хостов</h3>
-    <p class="disc-hint">Async-сканер пингует все адреса (.1–.254) выбранных подсетей параллельно.</p>
+    <h3>🔍 Сканер хостів</h3>
+    <p class="disc-hint">Async-сканер пінгує всі адреси (.1–.254) вибраних підмереж паралельно.</p>
     <div class="chk-list" id="discChecks"></div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <button class="btn btn-g" id="discBtn" onclick="startDiscovery()">🔍 Запустить</button>
-      <button class="btn btn-ghost" style="font-size:11px" onclick="switchTab('subnets',document.querySelectorAll('.tab')[2])">⚙ Подсети</button>
+      <button class="btn btn-g" id="discBtn" onclick="startDiscovery()">🔍 Запустити</button>
+      <button class="btn btn-ghost" style="font-size:11px" onclick="switchTab('subnets',document.querySelectorAll('.tab')[2])">⚙ Підмережі</button>
     </div>
     <div class="prog" id="discProg">
       <div class="prog-top"><span class="prog-lbl" id="dProgLbl">...</span><span class="prog-pct acc" id="dProgPct">0%</span></div>
@@ -913,23 +945,23 @@
     </div>
   </div>
   <div class="stats" id="discStats" style="display:none">
-    <div class="sc"><div class="sc-label">Адресов</div><div class="sc-val t" id="dTotal">—</div></div>
-    <div class="sc"><div class="sc-label">Активных</div><div class="sc-val g" id="dAlive">—</div></div>
+    <div class="sc"><div class="sc-label">Адрес</div><div class="sc-val t" id="dTotal">—</div></div>
+    <div class="sc"><div class="sc-label">Активних</div><div class="sc-val g" id="dAlive">—</div></div>
     <div class="sc"><div class="sc-label">Незарег.</div><div class="sc-val y" id="dNew">—</div></div>
-    <div class="sc"><div class="sc-label">В базе</div><div class="sc-val g" id="dKnown">—</div></div>
+    <div class="sc"><div class="sc-label">В базі</div><div class="sc-val g" id="dKnown">—</div></div>
   </div>
   <div class="two-col" id="discPanels" style="display:none">
     <div class="rpanel">
       <div class="rphdr new"><span style="font-size:16px">⚠️</span>
-        <span class="rp-title" style="color:var(--yel)">Незарегистрированные</span>
+        <span class="rp-title" style="color:var(--yel)">Незареєстровані</span>
         <span class="rp-cnt cnt-new" id="dNewCnt">0</span></div>
-      <div class="ip-list" id="dNewList"><div class="empty">Запустите сканирование</div></div>
+      <div class="ip-list" id="dNewList"><div class="empty">Запустіть сканування</div></div>
     </div>
     <div class="rpanel">
       <div class="rphdr known"><span style="font-size:16px">✅</span>
-        <span class="rp-title" style="color:var(--green)">Зарегистрированные</span>
+        <span class="rp-title" style="color:var(--green)">Зареєстровані</span>
         <span class="rp-cnt cnt-known" id="dKnownCnt">0</span></div>
-      <div class="ip-list" id="dKnownList"><div class="empty">Запустите сканирование</div></div>
+      <div class="ip-list" id="dKnownList"><div class="empty">Запустіть сканування</div></div>
     </div>
   </div>
 </div>
@@ -938,15 +970,15 @@
 <div class="tp" id="tab-subnets">
   <div class="panel">
     <div class="panel-hdr">
-      <div><h3>🗂 Реестр подсетей</h3><div class="panel-sub">Общий источник для мониторинга и сканера</div></div>
+      <div><h3>🗂 Реєстр підмереж</h3><div class="panel-sub">Загальне джерело для моніторингу та сканера</div></div>
     </div>
     <div class="sn-list" id="snList"></div>
-    <div class="hint" style="margin-bottom:8px">Добавить вручную (префикс или CIDR):</div>
+    <div class="hint" style="margin-bottom:8px">Додати вручну (префікс або CIDR):</div>
     <div class="add-row">
-      <input class="sn-inp" id="snInput" placeholder="192.168.99  или  192.168.99.0/24" onkeydown="if(event.key==='Enter')addSubnet()">
-      <button class="btn btn-acc" onclick="addSubnet()">+ Добавить</button>
+      <input class="sn-inp" id="snInput" placeholder="192.168.99  або  192.168.99.0/24" onkeydown="if(event.key==='Enter')addSubnet()">
+      <button class="btn btn-acc" onclick="addSubnet()">+ Додати</button>
     </div>
-    <div class="hint" style="margin-top:10px">💡 При добавлении устройства с новым IP подсеть создаётся автоматически.</div>
+    <div class="hint" style="margin-top:10px">💡 При добавлении пристроїва с новим IP підмережа створюється автоматично.</div>
   </div>
 
   <hr class="divider">
@@ -954,10 +986,10 @@
   <div class="range-scanner">
     <div class="range-hdr">
       <h3>🛰 Сканер диапазона <span class="range-badge">192.168.0–255.0/24</span></h3>
-      <button class="btn btn-pur" id="snScanBtn" onclick="startSnScan()">🛰 Сканировать</button>
+      <button class="btn btn-pur" id="snScanBtn" onclick="startSnScan()">🛰 Сканувати</button>
     </div>
     <div class="range-body">
-      <div class="range-desc">Пингует шлюз <strong>.1</strong> всех 256 подсетей диапазона <strong style="color:var(--pur)">192.168.x.0/24</strong>.<br>Показывает какие уже в реестре, а какие обнаружены впервые.</div>
+      <div class="range-desc">Пінгує шлюз <strong>.1</strong> всіх 256 підмереж діапазону <strong style="color:var(--pur)">192.168.x.0/24</strong>.<br>Показує які вже в реєстрі, а які виявлено вперше.</div>
       <div class="range-visual" style="font-size:11px">
         <strong>Проверяется:</strong> 192.168.<strong style="color:var(--pur)">0</strong>.1 ···
         192.168.<strong style="color:var(--pur)">255</strong>.1
@@ -973,22 +1005,22 @@
 
   <div class="stats" id="snScanStats" style="display:none">
     <div class="sc"><div class="sc-label">Проверено</div><div class="sc-val t" id="snStTotal">256</div></div>
-    <div class="sc"><div class="sc-label">Живых</div><div class="sc-val p" id="snStAlive">—</div></div>
-    <div class="sc"><div class="sc-label">Новых</div><div class="sc-val y" id="snStNew">—</div></div>
-    <div class="sc"><div class="sc-label">В реестре</div><div class="sc-val g" id="snStKnown">—</div></div>
+    <div class="sc"><div class="sc-label">Живих</div><div class="sc-val p" id="snStAlive">—</div></div>
+    <div class="sc"><div class="sc-label">Нових</div><div class="sc-val y" id="snStNew">—</div></div>
+    <div class="sc"><div class="sc-label">В реєстрі</div><div class="sc-val g" id="snStKnown">—</div></div>
   </div>
   <div class="two-col" id="snScanPanels" style="display:none">
     <div class="rpanel">
       <div class="rphdr new"><span style="font-size:16px">⚠️</span>
         <span class="rp-title" style="color:var(--yel)">Не в реестре</span>
         <span class="rp-cnt cnt-new" id="snNewCnt">0</span></div>
-      <div class="ip-list" id="snNewList"><div class="empty">Результаты появятся здесь</div></div>
+      <div class="ip-list" id="snNewList"><div class="empty">Результати з'являться тут</div></div>
     </div>
     <div class="rpanel">
       <div class="rphdr known"><span style="font-size:16px">✅</span>
         <span class="rp-title" style="color:var(--green)">Уже в реестре</span>
         <span class="rp-cnt cnt-known" id="snKnownCnt">0</span></div>
-      <div class="ip-list" id="snKnownList"><div class="empty">Результаты появятся здесь</div></div>
+      <div class="ip-list" id="snKnownList"><div class="empty">Результати з'являться тут</div></div>
     </div>
   </div>
 </div>
@@ -999,13 +1031,13 @@
   <div class="panel">
     <div class="panel-hdr">
       <div>
-        <h3>🕸 Топология сети</h3>
-        <div class="panel-sub">Автоматическое построение схемы связей на основе подсетей и типов устройств</div>
+        <h3>🕸 Топологія мережі</h3>
+        <div class="panel-sub">Автоматична побудова схеми зв'язків на основі підмереж и типов пристроїв</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button class="btn btn-ghost" style="font-size:11px" onclick="topoToggleLabels()">🏷 Метки</button>
         <button class="btn btn-ghost" style="font-size:11px" onclick="topoResetZoom()">⊕ Сброс</button>
-        <button class="btn btn-acc" style="font-size:11px" onclick="loadTopology()">↻ Обновить</button>
+        <button class="btn btn-acc" style="font-size:11px" onclick="loadTopology()">↻ Оновити</button>
       </div>
     </div>
     <!-- Legend -->
@@ -1014,7 +1046,7 @@
       <span class="tl-item"><span class="tl-dot" style="background:var(--cyan)"></span>WiFi AP</span>
       <span class="tl-item"><span class="tl-dot" style="background:var(--pur)"></span>Камера</span>
       <span class="tl-item"><span class="tl-dot" style="background:var(--green)"></span>Сервер</span>
-      <span class="tl-item"><span class="tl-dot" style="background:var(--muted)"></span>Клиент</span>
+      <span class="tl-item"><span class="tl-dot" style="background:var(--muted)"></span>Клієнт</span>
       <span class="tl-item"><span class="tl-line" style="border-color:var(--acc)"></span>Подсеть</span>
       <span class="tl-item"><span class="tl-line" style="border-color:var(--yel);border-style:dashed"></span>Backbone</span>
     </div>
@@ -1023,9 +1055,9 @@
     <!-- SVG canvas -->
     <div id="topoWrap" style="position:relative;width:100%;height:580px;background:var(--sf2);border-radius:10px;overflow:hidden;border:1px solid var(--bd)">
       <svg id="topoSvg" style="width:100%;height:100%"></svg>
-      <div id="topoEmpty" style="display:none;position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px">Нет данных — добавьте устройства</div>
+      <div id="topoEmpty" style="display:none;position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px">Немає даних — добавьте пристроїва</div>
     </div>
-    <div style="font-size:10px;color:var(--muted);margin-top:8px">💡 Перетаскивайте узлы · Scroll = зум · Нажмите на узел для деталей</div>
+    <div style="font-size:10px;color:var(--muted);margin-top:8px">💡 Перетягуйте вузли · Scroll = зум · Натисніть на узел для деталей</div>
   </div>
 </div>
 
@@ -1035,22 +1067,22 @@
     <div class="panel-hdr">
       <div>
         <h3>🛤 Traceroute</h3>
-        <div class="panel-sub">Визуализация маршрута до устройства с временем отклика каждого хопа</div>
+        <div class="panel-sub">Взуалзация маршрута до пристроїва с временем відклика каждого хопа</div>
       </div>
     </div>
     <!-- Target selector -->
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px">
       <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:180px">
-        <label class="tg-label">IP или выберите устройство</label>
+        <label class="tg-label">IP або оберіть пристрій</label>
         <input class="tg-inp" id="traceIp" placeholder="192.168.88.1" onkeydown="if(event.key==='Enter')runTraceroute()">
       </div>
       <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:180px">
-        <label class="tg-label">Быстрый выбор</label>
+        <label class="tg-label">Швидкий вибір</label>
         <select class="tg-inp" id="traceDevSelect" onchange="document.getElementById('traceIp').value=this.value">
-          <option value="">— из базы —</option>
+          <option value="">— з бази —</option>
         </select>
       </div>
-      <button class="btn btn-acc" id="traceBtn" onclick="runTraceroute()">▶ Запустить</button>
+      <button class="btn btn-acc" id="traceBtn" onclick="runTraceroute()">▶ Запустити</button>
     </div>
     <!-- Progress -->
     <div id="traceProgress" style="display:none;margin-bottom:12px">
@@ -1071,7 +1103,7 @@
       <div id="traceTable"></div>
     </div>
     <div id="traceEmpty" style="text-align:center;padding:40px;color:var(--muted);font-size:12px">
-      Введите IP и нажмите «Запустить»<br>
+      Введите IP и нажмите «Запустити»<br>
       <span style="font-size:10px;opacity:.6">Требует установленного <code>traceroute</code> на сервере</span>
     </div>
     <div id="traceError" style="display:none;padding:12px 16px;background:var(--rd);border:1px solid #ff3d5740;border-radius:8px;color:var(--red);font-size:12px"></div>
@@ -1083,15 +1115,15 @@
 <!-- Device modal -->
 <div class="modal-ov" id="devModal">
   <div class="modal">
-    <h2 id="mTitle">Добавить устройство</h2>
+    <h2 id="mTitle">Додати пристрій</h2>
     <input type="hidden" id="mId">
     <div class="fg-row">
       <div class="fg"><label>IP Адрес</label><input id="mIp" placeholder="192.168.88.X"></div>
       <div class="fg"><label>Тип</label>
         <select id="mType">
           <option value="router">Роутер</option><option value="ap">WiFi AP</option>
-          <option value="camera">IP Камера</option><option value="client">Клиент</option>
-          <option value="mobile">Мобильный</option><option value="server">Сервер</option>
+          <option value="camera">IP Камера</option><option value="client">Клієнт</option>
+          <option value="mobile">Мобільний</option><option value="server">Сервер</option>
         </select>
       </div>
     </div>
@@ -1106,18 +1138,18 @@
       </div>
       <div id="mScanPorts" style="display:none;margin-top:8px;font-size:10px;color:var(--muted)"></div>
     </div>
-    <div class="fg"><label>Название</label><input id="mName" placeholder="MikroTik #1"></div>
-    <div class="fg"><label>Местоположение</label><input id="mLoc" placeholder="Серверная..."></div>
+    <div class="fg"><label>Назва</label><input id="mName" placeholder="MikroTik #1"></div>
+    <div class="fg"><label>Місцезнаходження</label><input id="mLoc" placeholder="Серверная..."></div>
     <div class="fg-row">
-      <div class="fg"><label>MAC адрес</label><input id="mMac" placeholder="AA:BB:CC:DD:EE:FF"></div>
-      <div class="fg"><label>Производитель</label><input id="mVendor" placeholder="MikroTik"></div>
+      <div class="fg"><label>MAC адреса</label><input id="mMac" placeholder="AA:BB:CC:DD:EE:FF"></div>
+      <div class="fg"><label>Прозводитель</label><input id="mVendor" placeholder="MikroTik"></div>
     </div>
     <div class="fg"><label>Модель</label><input id="mModel" placeholder="MikroTik RouterOS"></div>
     <div style="margin:14px 0 10px;padding-top:12px;border-top:1px solid var(--bd);display:flex;align-items:center;gap:8px;">
-      <span style="font-size:11px;font-weight:700;color:var(--muted)">🔑 Учётные данные для перезагрузки</span>
+      <span style="font-size:11px;font-weight:700;color:var(--muted)">🔑 Облікові дані для перезавантаження</span>
     </div>
     <div class="fg-row">
-      <div class="fg"><label>Логин</label><input id="mLogin" placeholder="admin" autocomplete="off"></div>
+      <div class="fg"><label>Логін</label><input id="mLogin" placeholder="admin" autocomplete="off"></div>
       <div class="fg"><label>Пароль</label>
         <div style="position:relative">
           <input id="mPassword" type="password" placeholder="••••••••" autocomplete="new-password" style="padding-right:36px">
@@ -1129,15 +1161,26 @@
       Сохраняется локально в devices.json. Используется для перезагрузки через HTTP API / SSH.
     </div>
     <div class="modal-act">
-      <button class="btn btn-cancel" onclick="closeModal()">Отмена</button>
-      <button class="btn btn-acc" onclick="saveDevice()">Сохранить</button>
+      <button class="btn btn-cancel" onclick="closeModal()">Скасування</button>
+      <button class="btn btn-acc" onclick="saveDevice()">Зберегти</button>
     </div>
   </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="/static/js/main.js"></script>
+<script src="/static/js/globals.js"></script>
+<script src="/static/js/traceroute.js"></script>
+<script src="/static/js/topology.js"></script>
+<script src="/static/js/groups.js"></script>
+<script src="/static/js/snmp.js"></script>
+<script src="/static/js/dashboard.js"></script>
+<script src="/static/js/notifications.js"></script>
+<script src="/static/js/twofa.js"></script>
+<script src="/static/js/sla.js"></script>
+<script src="/static/js/mikrotik.js"></script>
+<script src="/static/js/websocket.js"></script>
 
 
 <!-- SNMP Stats Modal -->
@@ -1148,7 +1191,7 @@
       <button class="btn btn-ghost" style="padding:4px 10px;font-size:12px" onclick="closeSnmpModal()">✕</button>
     </div>
     <div id="snmpModalBody">
-      <div style="text-align:center;padding:30px;color:var(--muted);font-size:12px">Загрузка...</div>
+      <div style="text-align:center;padding:30px;color:var(--muted);font-size:12px">Завантаження...</div>
     </div>
   </div>
 </div>

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>NetWatch — Вход</title>
+<title>NetWatch — Вхід</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
 <style>
   :root{--bg:#0d1117;--sf:#111827;--bd:#1e2a3a;--text:#e2e8f0;--muted:#4a5568;
@@ -71,7 +71,7 @@
     <div class="logo-icon">⬡</div>
     <div>
       <h1>Net<span>Watch</span></h1>
-      <div class="sub" id="cardSub">Мониторинг сетевой инфраструктуры</div>
+      <div class="sub" id="cardSub">Моніторинг мережевої інфраструктури</div>
     </div>
   </div>
 
@@ -80,12 +80,12 @@
     <div class="step active" id="stepBar1"></div>
     <div class="step" id="stepBar2"></div>
   </div>
-  <div class="step-label" id="stepLabel">Шаг 1 из 2 — Логин и пароль</div>
+  <div class="step-label" id="stepLabel">Крок 1 з 2 — Логін та пароль</div>
 
   <!-- Step 1: password -->
   <div id="step1">
     <div class="fg">
-      <label>Логин</label>
+      <label>Логін</label>
       <input id="username" type="text" placeholder="admin"
              autocomplete="username" autofocus>
     </div>
@@ -95,7 +95,7 @@
              autocomplete="current-password"
              onkeydown="if(event.key==='Enter')doLogin()">
     </div>
-    <button class="btn" id="loginBtn" onclick="doLogin()">Войти →</button>
+    <button class="btn" id="loginBtn" onclick="doLogin()">Увійти →</button>
     <div class="err" id="errMsg1"></div>
     <div class="hint">По умолчанию: <b>admin</b> / <b>netwatch</b></div>
   </div>
@@ -104,8 +104,8 @@
   <div id="step2">
     <div class="totp-icon">🔐</div>
     <div class="totp-desc">
-      Откройте <b>Google Authenticator</b> или <b>Authy</b><br>
-      и введите 6-значный код для <b id="totpUser"></b>
+      Відкрийте <b>Google Authenticator</b> або <b>Authy</b><br>
+      та введіть 6-значний код для <b id="totpUser"></b>
     </div>
     <div class="fg">
       <label>Код 2FA</label>
@@ -115,14 +115,14 @@
              oninput="this.value=this.value.replace(/\D/g,'')"
              onkeydown="if(event.key==='Enter')doVerify2FA()">
     </div>
-    <button class="btn" id="verifyBtn" onclick="doVerify2FA()">Подтвердить ✓</button>
+    <button class="btn" id="verifyBtn" onclick="doVerify2FA()">Підтвердити ✓</button>
     <button class="btn btn-ghost" onclick="backToStep1()">← Назад</button>
     <div class="err" id="errMsg2"></div>
 
     <div class="totp-timer">
       <span id="timerSec">30</span>с
       <div class="timer-bar"><div class="timer-fill" id="timerFill" style="width:100%"></div></div>
-      <span style="color:var(--muted)">до смены кода</span>
+      <span style="color:var(--muted)">до зміни коду</span>
     </div>
   </div>
 </div>
@@ -152,8 +152,8 @@ function showStep2(username) {
   document.getElementById('step2').style.display    = 'block';
   document.getElementById('stepBar1').className     = 'step done';
   document.getElementById('stepBar2').className     = 'step active';
-  document.getElementById('stepLabel').textContent  = 'Шаг 2 из 2 — Двухфакторная аутентификация';
-  document.getElementById('cardSub').textContent    = 'Подтверждение личности';
+  document.getElementById('stepLabel').textContent  = 'Крок 2 з 2 — Двофакторна автентифікація';
+  document.getElementById('cardSub').textContent    = 'Підтвердження особи';
   document.getElementById('totpUser').textContent   = username;
   document.getElementById('totpCode').value         = '';
   document.getElementById('errMsg2').textContent    = '';
@@ -167,8 +167,8 @@ function backToStep1() {
   document.getElementById('step2').style.display    = 'none';
   document.getElementById('stepBar1').className     = 'step active';
   document.getElementById('stepBar2').className     = 'step';
-  document.getElementById('stepLabel').textContent  = 'Шаг 1 из 2 — Логин и пароль';
-  document.getElementById('cardSub').textContent    = 'Мониторинг сетевой инфраструктуры';
+  document.getElementById('stepLabel').textContent  = 'Крок 1 з 2 — Логін та пароль';
+  document.getElementById('cardSub').textContent    = 'Моніторинг мережевої інфраструктури';
   document.getElementById('errMsg1').textContent    = '';
 }
 
@@ -177,7 +177,7 @@ async function doLogin() {
   const err = document.getElementById('errMsg1');
   const u   = document.getElementById('username').value.trim();
   const p   = document.getElementById('password').value;
-  btn.disabled = true; btn.textContent = 'Проверка...'; err.textContent = '';
+  btn.disabled = true; btn.textContent = 'Перевірка...'; err.textContent = '';
   try {
     const r = await fetch('/login', {
       method: 'POST',
@@ -190,20 +190,20 @@ async function doLogin() {
     } else if (d.need_2fa) {
       showStep2(u);
     } else {
-      err.textContent = d.error || 'Ошибка входа';
+      err.textContent = d.error || 'Помилка входу';
     }
   } catch(e) {
-    err.textContent = 'Ошибка соединения';
+    err.textContent = 'Помилка з'єднання';
   }
-  btn.disabled = false; btn.textContent = 'Войти →';
+  btn.disabled = false; btn.textContent = 'Увійти →';
 }
 
 async function doVerify2FA() {
   const btn  = document.getElementById('verifyBtn');
   const err  = document.getElementById('errMsg2');
   const code = document.getElementById('totpCode').value.trim();
-  if (code.length !== 6) { err.textContent = 'Код должен состоять из 6 цифр'; return; }
-  btn.disabled = true; btn.textContent = 'Проверка...'; err.textContent = '';
+  if (code.length !== 6) { err.textContent = 'Код має складатися з 6 цифр'; return; }
+  btn.disabled = true; btn.textContent = 'Перевірка...'; err.textContent = '';
   try {
     const r = await fetch('/login', {
       method: 'POST',
@@ -215,14 +215,14 @@ async function doVerify2FA() {
       if (_timerInterval) clearInterval(_timerInterval);
       window.location.href = '/';
     } else {
-      err.textContent = d.error || 'Неверный код';
+      err.textContent = d.error || 'Невірний код';
       document.getElementById('totpCode').value = '';
       document.getElementById('totpCode').focus();
     }
   } catch(e) {
-    err.textContent = 'Ошибка соединения';
+    err.textContent = 'Помилка з'єднання';
   }
-  btn.disabled = false; btn.textContent = 'Подтвердить ✓';
+  btn.disabled = false; btn.textContent = 'Підтвердити ✓';
 }
 </script>
 </body>

@@ -76,10 +76,10 @@ def login_post():
     if not _check_rate_limit(client_ip):
         add_audit("login_blocked", username, client_ip, "rate limit")
         return jsonify({"ok": False,
-                        "error": "Слишком много попыток. Подождите 15 минут."}), 429
+                        "error": "Занадто багато спроб. Зачекайте 15 хвилин."}), 429
     if not check_credentials(username, password):
         add_audit("login_fail", username, client_ip, "bad credentials")
-        return jsonify({"ok": False, "error": "Неверный логин или пароль"}), 401
+        return jsonify({"ok": False, "error": "Невірний логін або пароль"}), 401
 
     # Password OK — check if 2FA required
     if totp_is_enabled():
@@ -105,6 +105,14 @@ def auth_me():
         return jsonify({"logged_in": True, "username": session.get("username")})
     return jsonify({"logged_in": False}), 401
 
+@bp.route("/api/ws-token")
+@login_required
+def get_ws_token():
+    """Issue a short-lived token for WebSocket auth (5 min TTL)."""
+    from .socket_handlers import generate_ws_token
+    token = generate_ws_token(session.get("username", ""))
+    return jsonify({"token": token})
+
 @bp.route("/api/auth/change", methods=["POST"])
 @login_required
 def auth_change():
@@ -112,7 +120,7 @@ def auth_change():
     new_u = data.get("username", "").strip()
     new_p = data.get("password", "")
     if not new_u or not new_p:
-        return jsonify({"error": "Логин и пароль обязательны"}), 400
+        return jsonify({"error": "Логін та пароль обов'язкові"}), 400
     change_credentials(new_u, new_p)
     session["username"] = new_u
     add_audit("credentials_changed", new_u, request.remote_addr or "")
@@ -146,9 +154,9 @@ def fa2_confirm():
     code   = (request.json or {}).get("code", "").strip()
     secret = session.get("pending_totp", "")
     if not secret:
-        return jsonify({"ok": False, "error": "Сначала запустите настройку 2FA"}), 400
+        return jsonify({"ok": False, "error": "Спочатку запустіть налаштування 2FA"}), 400
     if not totp_verify(secret, code):
-        return jsonify({"ok": False, "error": "Неверный код — приложение не синхронизировано"}), 400
+        return jsonify({"ok": False, "error": "Невірний код — додаток не синхронізований"}), 400
     totp_enable(secret)
     session.pop("pending_totp", None)
     add_audit("2fa_enabled", session.get("username", ""), request.remote_addr or "")
@@ -162,7 +170,7 @@ def fa2_disable():
     code = (request.json or {}).get("code", "").strip()
     if totp_is_enabled() and not totp_verify(totp_get_secret(), code):
         return jsonify({"ok": False,
-                        "error": "Введите текущий код 2FA для отключения"}), 400
+                        "error": "Введіть поточний код 2FA для відключення"}), 400
     totp_disable()
     add_audit("2fa_disabled", session.get("username", ""), request.remote_addr or "")
     return jsonify({"ok": True})
@@ -171,6 +179,28 @@ def fa2_disable():
 @bp.route("/")
 @login_required
 def index(): return render_template("index.html", username=session.get("username",""))
+
+@bp.route("/static/sw.js")
+def service_worker():
+    """Serve SW with correct headers — must be at root scope."""
+    from flask import send_from_directory, current_app
+    resp = send_from_directory(
+        current_app.static_folder, "sw.js",
+        mimetype="application/javascript"
+    )
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Service-Worker-Allowed"] = "/"
+    return resp
+
+@bp.route("/static/manifest.json")
+def pwa_manifest():
+    from flask import send_from_directory, current_app
+    resp = send_from_directory(
+        current_app.static_folder, "manifest.json",
+        mimetype="application/manifest+json"
+    )
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
 
 @bp.route("/api/devices")
 @login_required
@@ -276,7 +306,7 @@ def reboot_device_route(did):
     result = reboot_device(device)
     if result.get("ok"):
         add_event("reboot", device["ip"], device.get("name", device["ip"]),
-                  f"Перезагрузка: {result.get('method','')}")
+                  f"Перезавантаження: {result.get('method','')}")
         add_audit("reboot", session.get("username","?"), request.remote_addr or "",
                   f"{device.get('name', device['ip'])} ({device['ip']})")
     return jsonify(result)
@@ -1375,7 +1405,7 @@ def _mt_api(ip: str, fn):
     from .mikrotik import _with_api
     d, login, password = _mt_device(ip)
     if not login:
-        return {"ok": False, "error": "Нет учётных данных. Добавьте логин/пароль в карточку устройства."}
+        return {"ok": False, "error": "Немає облікових даних. Додайте логін/пароль до картки пристрою."}
     return _with_api(ip, login, password, fn)
 
 
@@ -1385,7 +1415,7 @@ def _mt_api(ip: str, fn):
         banner = s.recv(256)
         step("Initial banner", True, f"получено {len(banner)} байт: {banner[:60].hex()}")
     except _sock.timeout:
-        step("Initial banner", True, "нет баннера (нормально для RouterOS 7)")
+        step("Initial banner", True, "немає банера (нормально для RouterOS 7)")
     except Exception as e:
         step("Initial banner", False, str(e))
 

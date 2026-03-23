@@ -1,330 +1,382 @@
 # NetWatch
 
-Веб-система мониторинга сетевой инфраструктуры. Пинг, события, SNMP, топология, traceroute, управление устройствами — всё в одном интерфейсе.
+**Network infrastructure monitoring system** — real-time device status, MikroTik management, SNMP analytics, and event notifications. Built with Flask + Socket.IO + SQLite. No cloud, no subscriptions — runs entirely on your local network.
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue) ![Flask](https://img.shields.io/badge/Flask-2.3+-green) ![License](https://img.shields.io/badge/license-MIT-lightgrey)
-
----
-
-## Возможности
-
-**Мониторинг**
-- Авто-пинг всех устройств каждые 60 секунд
-- Статусы онлайн / оффлайн с цветовой индикацией
-- Спарклайны пинга (~2.4 часа истории на устройство)
-- Баннер питания — если шлюз `192.168.88.1` не отвечает, показывает «НЕТ СВЕТА»
-- Группировка устройств по подсетям `/24`
-- Пагинация (25 / 50 / 100 / все), поиск, фильтры по типу, сортировка
-
-**Устройства**
-- CRUD: добавить, редактировать, удалить
-- Поля: IP, имя, расположение, тип, MAC, вендор, модель, логин/пароль для ребута
-- Кнопка «🔬 Автозаполнить» в модалке — сканирует IP и заполняет MAC, вендора, модель, тип автоматически
-
-**Групповые действия**
-- Чекбоксы на строках и заголовках подсетей
-- Групповой пинг (параллельно, батчами по 10)
-- Групповой ребут (с предупреждением об устройствах без учётных данных)
-
-**События**
-- Автоматическая запись «упал» / «встал» при каждом авто-пинге
-- Правильная логика состояний: `None → False → True` без пропусков
-- Фильтры: Все / ⚡ Свет / 🔴 Упали / 🟢 Встали / 🔄 Ребут / 🆕 Новые
-- Панель тестирования — симулировать DOWN/UP для любого устройства без отключения железа
-- Обновление каждые 10 секунд
-
-**Сканер и обнаружение**
-- Async-сканер хостов (до 80 параллельных потоков)
-- Авто-обнаружение незарегистрированных хостов каждые 5 мин
-- Авто-сканирование диапазона `192.168.0–255.1` каждые 15 мин
-- Результаты в выпадающем окне прямо в хедере — счётчик новых хостов
-
-**Глубокий скан**
-- 26 портов: SSH, HTTP/HTTPS, RTSP, Winbox, Dahua SDK, Hikvision SDK, RDP, WinRM, TR-069, UPnP и др.
-- Fingerprint по портам + вендору
-- HTTP banner grabbing — определение модели по заголовку `Server:`
-- SNMP `sysDescr` для точной идентификации
-
-**SNMP мониторинг** (кнопка 📊 на каждом устройстве)
-- Uptime, CPU%, RAM (total/free/used%)
-- Все интерфейсы (до 32) — авто-определение индексов
-- Тип интерфейса: ethernet / wifi / bridge / loopback / tunnel
-- Статус oper/admin (R/S/RS как в Winbox)
-- Живой Tx/Rx в bps и packets/s — два замера с интервалом 2с
-- MikroTik-специфичные OID: точный CPU, RAM в байтах, напряжение, температура
-- Поддержка любого community string
-
-**Перезагрузка устройств**
-- MikroTik: REST API (RouterOS 7+) + бинарный API порт 8728 (RouterOS 6)
-- Hikvision: ISAPI PUT `/ISAPI/System/reboot`
-- Dahua: HTTP CGI `/cgi-bin/magicBox.cgi?action=reboot`
-- ASUS: AsusWRT `/apply.cgi`
-- Generic HTTP: перебор стандартных reboot-эндпоинтов
-- SSH: через `ssh` бинарник или `sshpass`
-
-**Traceroute**
-- Вертикальная схема маршрута с хопами
-- Нулевой хоп — сам сервер NetWatch
-- Цветовые зоны по подсетям, стрелки вниз, задержка справа
-- Обогащение хопов данными из базы (имя, вендор, модель)
-
-**Топология сети**
-- D3.js force-directed граф
-- Умные связи: gateway ↔ устройства подсети, backbone между роутерами, WAN между /16
-- Эллипс-зоны по подсетям с подписями
-- Gateway отмечен жирной границей и маркером ▲
-- Drag & drop узлов, zoom, тултип с деталями и кнопкой Traceroute
-
-**Telegram уведомления**
-- Несколько получателей с метками и переключателями
-- Типы: питание отключено/восстановлено, устройство N минут недоступно, новый незарег. хост
-- Тест-кнопка для каждого получателя отдельно
-
-**OUI база** — 50+ вендоров: MikroTik, Ubiquiti, Hikvision, Dahua, Huawei, Cisco, TP-Link, D-Link, Netgear, ASUS, Apple, Samsung, Xiaomi, Dell, HP, Lenovo, Raspberry Pi, Google, Amazon, Fortinet, Juniper, Aruba, QNAP, Synology и другие.
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab?style=flat&logo=python)](https://python.org)
+[![Flask](https://img.shields.io/badge/Flask-3.0-000000?style=flat&logo=flask)](https://flask.palletsprojects.com)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat)](LICENSE)
 
 ---
 
-## Структура проекта
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| 📡 **Real-time monitoring** | WebSocket-based device status (0ms latency via Socket.IO) |
+| 📊 **Dashboard** | Chart.js: 24h ping history, uptime %, latency top-5 |
+| 📈 **SLA analytics** | Uptime % for 24h / 7d / 30d with trend ↑↓ |
+| 📄 **PDF reports** | Print-ready reports via browser Cmd+P |
+| ⬡ **MikroTik** | Hotspot users, Firewall, DHCP leases, Syslog receiver |
+| 📡 **SNMP** | Live Tx/Rx per interface (Winbox-style modal) |
+| 🛤 **Traceroute** | Visual hop diagram with latency arcs |
+| 🕸 **Topology** | D3.js force-directed network map with subnet zones |
+| 🔍 **Auto-discovery** | Async scanner finds new hosts every 5 min |
+| 🔔 **Notifications** | Telegram · Discord · Email · Webhook |
+| 🔒 **Security** | HTTPS/TLS · 2FA TOTP · Brute-force protection · Audit log |
+| 💾 **Auto-backup** | Daily ZIP backups of SQLite database |
+| 📱 **PWA** | Installable on iPhone and Android home screen |
+
+---
+
+## Project Structure
 
 ```
-netwatch/
-├── run.py              # Точка входа
-├── requirements.txt
-├── netwatch/
-│   ├── app.py          # Flask application factory
-│   ├── routes.py       # Все API-эндпоинты (~40 маршрутов)
-│   ├── monitor.py      # Авто-пинг, события, discovery
-│   ├── scanner.py      # Async сканер: ping + порты + MAC
-│   ├── oui.py          # OUI база, fingerprint, HTTP banner, SNMP движок
-│   ├── events.py       # Журнал событий, Telegram, ping history
-│   ├── storage.py      # JSON-персистентность (devices, subnets)
-│   ├── reboot.py       # Multi-vendor reboot engine
-│   ├── auth.py         # Сессионная аутентификация (SHA-256 + salt)
-│   └── config.py       # Константы
+web_UI/
+│
+├── run.py                      # Entry point — starts Flask + Socket.IO
+├── requirements.txt            # Python dependencies
+├── generate_icons.py           # PWA icon generator (run once)
+├── setup_https.sh              # HTTPS setup script (macOS)
+├── start_https.sh              # Start nginx + NetWatch
+├── stop_https.sh               # Stop nginx
+│
+├── netwatch/                   # Python package
+│   ├── app.py                  # Flask factory — creates app, registers socketio
+│   ├── routes.py               # All HTTP API endpoints (62 routes)
+│   ├── monitor.py              # Ping loops, auto-discovery, scan orchestration
+│   ├── scanner.py              # Async scanner (ping + ports + MAC + SNMP)
+│   ├── oui.py                  # OUI vendor DB, SNMP engine, BER parser
+│   ├── reboot.py               # Multi-vendor reboot (MikroTik / Dahua / SSH)
+│   ├── mikrotik.py             # MikroTik RouterOS binary API (port 8728)
+│   ├── db.py                   # SQLite core — WAL mode, per-thread connections
+│   ├── storage.py              # Device & subnet CRUD
+│   ├── events.py               # Events, ping history, all notification channels
+│   ├── auth.py                 # Session auth + 2FA TOTP (pure stdlib)
+│   ├── backup.py               # Auto-backup daemon
+│   ├── config.py               # Constants
+│   ├── migrate.py              # One-time migration: JSON → SQLite
+│   ├── socket_handlers.py      # Socket.IO handlers + emitters
+│   └── socketio_instance.py    # Socket.IO singleton
+│
+├── static/
+│   ├── css/main.css            # Dark theme stylesheet
+│   ├── js/                     # Frontend — 11 modules
+│   │   ├── globals.js          # Globals, device list, settings, init (1300 lines)
+│   │   ├── traceroute.js       # Traceroute tab
+│   │   ├── topology.js         # Network topology (D3.js)
+│   │   ├── groups.js           # Bulk actions
+│   │   ├── snmp.js             # SNMP modal
+│   │   ├── dashboard.js        # Dashboard charts
+│   │   ├── notifications.js    # Discord, Email, Webhook, Sound, Backup, Audit
+│   │   ├── twofa.js            # 2FA management
+│   │   ├── sla.js              # SLA analytics
+│   │   ├── mikrotik.js         # MikroTik tab
+│   │   └── websocket.js        # Socket.IO real-time client
+│   ├── icons/                  # PWA icons (72px–512px PNG)
+│   ├── manifest.json           # PWA manifest
+│   └── sw.js                   # Service Worker
+│
 ├── templates/
-│   ├── index.html      # Главная SPA
-│   └── login.html
-└── static/
-    ├── css/main.css
-    └── js/main.js
+│   ├── index.html              # Main SPA
+│   └── login.html              # Login page (supports 2FA second step)
+│
+└── netwatch.db                 # SQLite database (auto-created)
 ```
-
-**Файлы данных** (создаются автоматически в корне проекта):
-
-| Файл | Содержимое |
-|------|-----------|
-| `devices.json` | База устройств |
-| `subnets.json` | Реестр подсетей |
-| `events.json` | Журнал событий (последние 1000) |
-| `telegram.json` | Настройки Telegram |
-| `auth.json` | Хэш пароля |
-| `.secret_key` | Ключ сессии Flask |
 
 ---
 
-## Быстрый старт
+## Quick Start
 
-**Требования:** Python 3.10+, macOS / Linux
+### macOS
 
 ```bash
-# Клонировать
-git clone https://github.com/yourname/netwatch.git
+# 1. Clone
+git clone https://github.com/goodelita1/netwatch.git
 cd netwatch
 
-# Зависимости
+# 2. Virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# 3. Install dependencies
 pip install -r requirements.txt
 
-# Запуск
+# 4. Run (HTTP, development)
 python run.py
+# Open: http://localhost:8000
+# Login: admin / netwatch  ← change this immediately!
+
+# 5. Setup HTTPS (recommended)
+bash setup_https.sh
+bash start_https.sh
+# Open: https://YOUR_IP:8443
 ```
 
-Открыть: **http://localhost:8000**
-
-Логин по умолчанию: `admin` / `netwatch` — смените сразу в ⚙️ Настройки.
-
----
-
-## Установка как системный сервис (macOS LaunchAgent)
-
-Создайте файл `~/Library/LaunchAgents/com.netwatch.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.netwatch</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/bin/python3</string>
-    <string>/path/to/netwatch/run.py</string>
-  </array>
-  <key>WorkingDirectory</key>
-  <string>/path/to/netwatch</string>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>/tmp/netwatch.log</string>
-  <key>StandardErrorPath</key>
-  <string>/tmp/netwatch.err</string>
-</dict>
-</plist>
-```
+### Linux (Ubuntu/Debian)
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.netwatch.plist
+# Install system packages
+sudo apt update
+sudo apt install python3-venv python3-pip traceroute -y
+
+# Clone and setup
+git clone https://github.com/goodelita1/netwatch.git
+cd netwatch
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Run
+python run.py
+
+# HTTPS with nginx (see HTTPS section)
 ```
 
-**Linux (systemd):**
+#### Systemd auto-start (Linux)
 
 ```ini
+# /etc/systemd/system/netwatch.service
 [Unit]
 Description=NetWatch Network Monitor
 After=network.target
 
 [Service]
 Type=simple
+User=YOUR_USER
 WorkingDirectory=/opt/netwatch
-ExecStart=/usr/bin/python3 run.py
+ExecStart=/opt/netwatch/venv/bin/python run.py
 Restart=always
 RestartSec=5
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
 ```
 
 ```bash
+sudo systemctl daemon-reload
 sudo systemctl enable --now netwatch
 ```
 
----
+### Windows (WSL2)
 
-## Настройка SNMP на устройствах
-
-**MikroTik:**
-```
-/snmp set enabled=yes
-/snmp community add name=public read-access=yes
+```powershell
+# Enable WSL2
+wsl --install -d Ubuntu
 ```
 
-**Cisco IOS:**
-```
-snmp-server community public RO
-```
-
-**Linux (snmpd):**
 ```bash
-apt install snmpd
-echo "rocommunity public" >> /etc/snmp/snmpd.conf
-systemctl restart snmpd
+# Inside WSL terminal:
+sudo apt install python3-venv python3-pip traceroute -y
+git clone https://github.com/goodelita1/netwatch.git
+cd netwatch
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python run.py
 ```
 
----
-
-## Настройка Telegram
-
-1. `@BotFather` → `/newbot` → скопировать токен
-2. Добавить бота в чат/канал, дать права администратора
-3. Получить Chat ID: `https://api.telegram.org/bot<TOKEN>/getUpdates`
-4. В NetWatch → ⚙️ Настройки → Telegram → вставить токен и Chat ID
+Open `http://localhost:8000` in Windows browser.
 
 ---
 
-## API
+## HTTPS Setup
 
-Все эндпоинты требуют авторизации (cookie-сессия). Базовый URL: `http://host:8000`.
+### macOS (one command)
 
-### Устройства
-| Метод | Путь | Описание |
-|-------|------|---------|
-| GET | `/api/devices` | Список устройств со статусами |
-| POST | `/api/devices` | Добавить устройство |
-| PUT | `/api/devices/<id>` | Обновить устройство |
-| DELETE | `/api/devices/<id>` | Удалить устройство |
-
-### Сканирование
-| Метод | Путь | Описание |
-|-------|------|---------|
-| POST | `/api/scan` | Быстрый пинг всех |
-| POST | `/api/deep_scan` | Полный скан (порты + MAC + вендор) |
-| GET | `/api/scan_host/<ip>` | Полный скан одного хоста |
-| GET | `/api/ping/<ip>` | Одиночный пинг + событие |
-
-### SNMP
-| Метод | Путь | Описание |
-|-------|------|---------|
-| GET | `/api/snmp/<ip>` | Полный SNMP опрос (система + интерфейсы) |
-| GET | `/api/snmp/<ip>/traffic` | Живой трафик (2 замера, ~4с) |
-| GET | `/api/snmp/<ip>/debug` | Сырые OID для диагностики |
-
-Параметр: `?community=public`
-
-### Сеть
-| Метод | Путь | Описание |
-|-------|------|---------|
-| GET | `/api/traceroute/<ip>` | Маршрут до IP |
-| GET | `/api/topology` | Граф топологии сети |
-
-### События
-| Метод | Путь | Описание |
-|-------|------|---------|
-| GET | `/api/events` | Журнал событий (`?limit=300`) |
-| DELETE | `/api/events` | Очистить журнал |
-| POST | `/api/test/event` | Симулировать событие `{"ip":"...","kind":"down"}` |
-
-### Управление
-| Метод | Путь | Описание |
-|-------|------|---------|
-| POST | `/api/reboot/<id>` | Перезагрузить устройство |
-
----
-
-## Конфигурация
-
-Файл `netwatch/config.py`:
-
-```python
-POWER_IP  = "192.168.88.1"   # Шлюз-индикатор питания
-PHIST_MAX = 144               # Глубина истории пинга (144 × 60с = 2.4ч)
-```
-
----
-
-## Логика событий
-
-```
-prev=None,  alive=False  →  записать время падения, событие НЕ генерируется
-prev=None,  alive=True   →  первый скан онлайн, событие НЕ генерируется
-prev=False, alive=False  →  всё ещё offline, ничего
-prev=False, alive=True   →  событие "встал" ✅
-prev=True,  alive=False  →  событие "упал" ✅
-prev=True,  alive=True   →  всё ещё online, ничего
-```
-
-Это гарантирует что при рестарте сервера нет ложных событий — состояние инициализируется тихо при первом скане, а события генерируются только при реальных переходах.
-
----
-
-## Требования
-
-| Пакет | Версия |
-|-------|--------|
-| flask | ≥ 2.3 |
-| paramiko | ≥ 3.0 |
-
-`traceroute` — системная утилита, должна быть установлена:
 ```bash
-# macOS (уже есть)
-# Linux
-apt install traceroute
+bash setup_https.sh
 ```
+
+Installs nginx, generates RSA-2048 certificate with SAN, configures WebSocket proxy, optionally trusts cert in Keychain.
+
+### Linux (nginx)
+
+```bash
+sudo apt install nginx -y
+
+# Generate certificate
+sudo mkdir -p /etc/ssl/netwatch
+sudo openssl req -x509 -newkey rsa:2048 -nodes \
+    -keyout /etc/ssl/netwatch/key.pem \
+    -out    /etc/ssl/netwatch/cert.pem \
+    -days 3650 -subj "/CN=NetWatch"
+
+# Enable site
+sudo cp nginx/netwatch.conf /etc/nginx/sites-available/netwatch
+sudo ln -s /etc/nginx/sites-available/netwatch /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+> **Important:** nginx config must have `map $http_upgrade $connection_upgrade` inside the `http {}` block for WebSocket to work correctly.
 
 ---
 
-## Лицензия
+## Configuration
 
-MIT
+### Default credentials
+
+Login: `admin` / Password: `netwatch`
+
+> Change in **Settings → Authorization** after first login.
+
+### Power outage detection
+
+Set your router/gateway IP in **Settings → Power indicator**.
+If this IP stops responding, NetWatch displays a "NO POWER" banner.
+Default: `192.168.88.1` (MikroTik default gateway).
+
+### Telegram setup
+
+1. Create bot: `@BotFather` → `/newbot` → copy token
+2. Add bot to your channel/group as admin
+3. Get Chat ID: `https://api.telegram.org/bot<TOKEN>/getUpdates`
+4. Enter token + Chat ID in **Settings → Telegram**
+
+### MikroTik API
+
+```
+# On MikroTik (SSH or terminal):
+/ip service enable api
+/ip service set api port=8728
+```
+
+Add credentials to the device card, then use the **MikroTik** tab.
+
+### Syslog receiver
+
+```
+# On MikroTik:
+/system logging action add name=netwatch target=remote \
+    remote=NETWATCH_IP remote-port=5140
+
+/system logging add topics=firewall action=netwatch
+/system logging add topics=dhcp     action=netwatch
+/system logging add topics=wireless action=netwatch
+/system logging add topics=system   action=netwatch
+```
+
+> macOS: use port **5140** (port 514 requires root). Start receiver in **Settings → MikroTik → Syslog**.
+
+---
+
+## Database
+
+SQLite with WAL mode. File: `netwatch.db` in project root.
+
+| Table | Contents |
+|-------|----------|
+| `devices` | IP, name, type, MAC, vendor, credentials |
+| `subnets` | Subnet registry for scanning |
+| `events` | Down/up/reboot/new_host events (max 5,000) |
+| `ping_history` | Timestamps for sparklines and SLA (TTL 7 days) |
+| `settings` | Telegram, auth, 2FA secret, Discord, Email, Webhook |
+| `audit_log` | Login attempts, credential changes (max 10,000) |
+
+### Migration from legacy JSON
+
+```bash
+python -m netwatch.migrate
+```
+
+Migrates `devices.json`, `events.json`, `subnets.json`, `telegram.json` to SQLite. Original files renamed to `.bak`.
+
+---
+
+## API Reference
+
+All endpoints require authentication (`/login` first).
+
+```bash
+# Quick test
+curl -c cookies.txt -X POST http://localhost:8000/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"netwatch"}'
+
+curl -b cookies.txt http://localhost:8000/api/devices
+```
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/devices` | GET | All devices with live status |
+| `/api/devices` | POST | Add device |
+| `/api/devices/<id>` | PUT/DELETE | Update/delete device |
+| `/api/ping/<ip>` | GET | Single ping + fires events |
+| `/api/snmp/<ip>/traffic` | GET | Live Tx/Rx bps |
+| `/api/traceroute/<ip>` | GET | Traceroute |
+| `/api/topology` | GET | Network graph |
+| `/api/sla` | GET | SLA data (1d/7d/30d) |
+| `/api/report/html?period=7d` | GET | Printable HTML report |
+| `/api/dashboard` | GET | Dashboard charts data |
+| `/api/mt/<ip>/hotspot/active` | GET | MikroTik Hotspot sessions |
+| `/api/mt/<ip>/dhcp` | GET | DHCP leases |
+| `/api/audit` | GET | Audit log |
+| `/api/backup` | POST | Create backup now |
+| `/api/export/devices.csv` | GET | CSV export |
+
+---
+
+## WebSocket Events
+
+Connect to the same URL. Authentication via session or `?token=` query param.
+
+| Event | Direction | Description |
+|-------|-----------|-------------|
+| `connected` | → Client | Snapshot of all devices on connect |
+| `device_update` | → Client | Single device status/latency change |
+| `new_event` | → Client | New log event (down/up/reboot) |
+| `scan_done` | → Client | Ping scan cycle completed |
+| `ping_request` | Client → | Request immediate ping for IP |
+
+---
+
+## Troubleshooting
+
+**MikroTik API: "wrong password"**
+```bash
+nc -zv 192.168.88.1 8728    # check port is open
+# On MikroTik:
+/ip service print            # verify api is enabled
+/user print detail where name=admin  # check allowed-address is empty
+```
+
+**WebSocket shows "Poll" not "Live"**
+- Check nginx has `map $http_upgrade $connection_upgrade` **inside** `http {}`
+- Check `proxy_read_timeout 3600s` is set
+- Browser extension errors in console (TronLink, Polkadot, MetaMask) are **not** NetWatch errors — safely ignore them
+
+**manifest.json 403/404**
+- Remove `location ~ \.(json|db|bak)$` from nginx
+- Use only `location ~ \.(db|bak)$` — JSON files must pass through to Flask
+
+**Syslog: no entries**
+- Verify MikroTik logging action was created: `/system logging action print`
+- Test: `/log info message="test"` on MikroTik
+- Check port 5140 is not blocked
+
+**"Not Secure" browser warning**
+- Normal for self-signed certificate
+- To remove: `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.netwatch/ssl/cert.pem`
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|------------|
+| Backend | Python 3.11, Flask 3.0, Flask-SocketIO 5.3, Eventlet |
+| Database | SQLite (WAL mode, per-thread connections) |
+| Frontend | Vanilla JS ES2022, 11 modules (~3900 lines) |
+| Charts | Chart.js 4.4 |
+| Network graph | D3.js 7.8 |
+| Real-time | Socket.IO 4.7 (WebSocket transport) |
+| MikroTik API | Binary protocol port 8728, pure stdlib |
+| 2FA | RFC 6238 TOTP, pure stdlib (no pyotp) |
+| Proxy | nginx with WebSocket upgrade |
+| PWA | Service Worker, Web App Manifest, 8 icon sizes |
+
+---
+
+## License
+
+MIT — free for personal and commercial use.

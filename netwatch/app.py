@@ -1,6 +1,7 @@
 """Flask application factory."""
 import os, threading, time
 from flask import Flask
+from .socketio_instance import socketio
 from .db      import init_db, cleanup_ping_history
 from .backup  import backup_loop
 from .routes  import bp
@@ -11,7 +12,6 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def create_app() -> Flask:
-    # Инициализируем БД до создания Flask-приложения
     init_db()
 
     app = Flask(
@@ -20,14 +20,12 @@ def create_app() -> Flask:
         static_folder=os.path.join(_ROOT, "static"),
     )
 
-    # ProxyFix — корректный X-Real-IP когда запросы идут через nginx
     try:
         from werkzeug.middleware.proxy_fix import ProxyFix
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
     except ImportError:
-        pass  # werkzeug не установлен — работает без proxy
+        pass
 
-    # Secret key — генерируем один раз, храним в файле
     _sk_file = os.path.join(_ROOT, ".secret_key")
     if os.path.exists(_sk_file):
         app.secret_key = open(_sk_file, "rb").read()
@@ -38,11 +36,18 @@ def create_app() -> Flask:
         app.secret_key = key
 
     app.register_blueprint(bp)
+
+    # Инициализируем SocketIO — ПОСЛЕ регистрации blueprint
+    socketio.init_app(app)
+
+    # Регистрируем socket event handlers
+    from . import socket_handlers  # noqa — side-effect import
+    _ = socket_handlers            # suppress unused warning
+
     return app
 
 
 def _cleanup_loop():
-    """Очищаем старую ping_history каждый час."""
     while True:
         time.sleep(3600)
         try:
@@ -52,7 +57,7 @@ def _cleanup_loop():
 
 
 def start_background_tasks():
-    """Запускаем все фоновые потоки. Вызвать один раз после create_app()."""
+    """Запускаем все фоновые потоки."""
     threading.Thread(target=lambda: _do_monitor_scan(deep=False), daemon=True).start()
     threading.Thread(target=background_auto_ping,      daemon=True).start()
     threading.Thread(target=background_auto_discovery, daemon=True).start()

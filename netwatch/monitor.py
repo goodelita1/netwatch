@@ -43,6 +43,14 @@ def _on_ping_result(ip: str, alive, ms, devices_by_ip: dict, cfg: dict = None):
 
     record_ping(ip, alive, ms)   # sparkline history (свой лок внутри)
 
+    # Push real-time update to all WebSocket clients
+    try:
+        from .socket_handlers import emit_device_update
+        name_ws = devices_by_ip.get(ip, {}).get("name", ip)
+        emit_device_update(ip, alive, ms, name_ws)
+    except Exception:
+        pass  # graceful fallback if socketio not initialised yet
+
     if cfg is None:
         cfg = load_tg()
 
@@ -55,7 +63,7 @@ def _on_ping_result(ip: str, alive, ms, devices_by_ip: dict, cfg: dict = None):
             # Был online → стал offline — генерируем "упал"
             _down_since[ip] = time.time()
             print(f"[events] DOWN  {name} ({ip})")
-            add_event("down", ip, name, "Устройство перестало отвечать на пинг")
+            add_event("down", ip, name, "Пристрій перестав відповідати на пінг")
             if is_gw:
                 add_event("power_off", ip, name,
                           "Главный шлюз недоступен — возможно отключение электроэнергии",
@@ -184,6 +192,11 @@ def background_auto_ping():
             _do_monitor_scan(deep=False)
             online = sum(1 for v in status_cache.values() if v is True)
             print(f"[auto-ping] done  online={online}/{len(status_cache)}")
+            try:
+                from .socket_handlers import emit_scan_done
+                emit_scan_done(online, len(status_cache))
+            except Exception:
+                pass
         except Exception:
             print("[auto-ping] error:")
             traceback.print_exc()
@@ -228,6 +241,11 @@ def _run_auto_discovery():
             cfg = load_tg()
             if cfg.get("notify_new_host"):
                 for ip in found_new:
+                    try:
+                        from .socket_handlers import emit_autoscan_update
+                        emit_autoscan_update([ip], [])
+                    except Exception:
+                        pass
                     add_event("new_host", ip, ip,
                               "Незарегистрированный хост в сети", notify=True)
     except Exception:

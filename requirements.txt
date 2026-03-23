@@ -1,2 +1,16 @@
-flask>=2.3
-paramiko>=3.0
+# NetWatch — Python dependencies
+# Install: pip install -r requirements.txt
+
+# ── Web framework ─────────────────────────────────────────────────────────────
+flask>=3.0
+flask-socketio>=5.3
+eventlet>=0.36          # async backend for Flask-SocketIO (WebSocket support)
+werkzeug>=3.0           # ProxyFix for nginx reverse proxy
+
+# ── SSH / Reboot ──────────────────────────────────────────────────────────────
+paramiko>=3.4           # SSH reboot for Linux/ASUS devices
+
+# ── Optional: better PWA icons ────────────────────────────────────────────────
+# cairosvg>=2.7         # high-quality SVG→PNG icon generation
+#                       # requires: brew install cairo (macOS) or apt install libcairo2 (Linux)
+#                       # Run: python3 generate_icons.py

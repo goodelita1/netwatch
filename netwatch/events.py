@@ -363,6 +363,13 @@ def add_event(kind: str, ip: str, name: str, detail: str = "", notify: bool = Fa
                 LIMIT MAX(0, (SELECT COUNT(*) FROM events) - 5000)
             )
         """)
+    # Always push to WebSocket clients (regardless of notify flag)
+    try:
+        from .socket_handlers import emit_new_event
+        emit_new_event(kind, ip, name, detail, ts)
+    except Exception:
+        pass
+
     if notify:
         icon = _EV_ICONS.get(kind, "ℹ️")
         msg  = f"{icon} <b>NetWatch</b>\n<b>{name}</b> ({ip})\n{detail}"
