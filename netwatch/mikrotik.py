@@ -339,44 +339,146 @@ _SYSLOG_FACILITY = ["kern","user","mail","daemon","auth","syslog","lpr","news",
 _SYSLOG_SEVERITY = ["emerg","alert","crit","err","warning","notice","info","debug"]
 
 _MT_TOPICS = {
-    "firewall": "🛡", "dhcp": "🔗", "hotspot": "👤", "wireless": "📶",
+    "firewall": "🛡", "dhcp": "🔗", "hotspot": "👤", "wireless": "📦",
     "system": "⚙️", "info": "ℹ️", "error": "❌", "warning": "⚠️",
     "ppp": "🔌", "route": "🛤", "interface": "🔌", "script": "📜",
+    "account": "👤", "debug": "🐛", "critical": "🚨",
 }
 
+# Regex to locate the start of each MikroTik plain-text log entry.
+# MikroTik (RouterOS 7 without bsd-syslog=yes) concatenates multiple
+# entries into one UDP packet without any delimiter or RFC 3164 header.
+_MT_ENTRY_RE = _re.compile(
+    r'(?:^|(?<=\w))(?=('
+    r'(?:firewall|dhcp|hotspot|wireless|system|ppp|route|interface|script|account'
+    r'|info|error|warning|debug|critical|web-proxy|ssh|telnet|api|winbox|snmp|ntp'
+    r'|bridge|ipsec|l2tp|ovpn|pptp|sstp|vrrp|ospf|bgp|rip|mpls|traffic-flow'
+    r')(?:,[a-z_-]+)*\s'
+    r'))',
+    _re.MULTILINE
+)
 
-def _parse_syslog(data: bytes, addr: tuple) -> dict:
-    """Parse RFC 3164 / RFC 5424 syslog message."""
+
+def _split_mt_packet(data: bytes) -> list:
+    """Split one UDP packet from MikroTik into individual log entry strings."""
     try:
         text = data.decode("utf-8", errors="replace").strip()
     except Exception:
-        text = data.hex()
+        return []
+    if not text:
+        return []
+    # If it has an RFC 3164 <pri> header treat as a single entry
+    if text.startswith("<") and ">" in text[:6]:
+        return [text]
+    positions = [m.start() for m in _MT_ENTRY_RE.finditer(text)]
+    if not positions:
+        return [text] if text.strip() else []
+    entries = []
+    for i, pos in enumerate(positions):
+        end = positions[i + 1] if i + 1 < len(positions) else len(text)
+        chunk = text[pos:end].strip()
+        if chunk:
+            entries.append(chunk)
+    return entries
 
+
+def _parse_mt_entry(entry: str, src_ip: str) -> dict:
+    """Parse one MikroTik plain log entry like 'dhcp,debug,packet ciaddr=...'."""
+    m = _re.match(r'^([\w,]+)\s+(.*)', entry, _re.DOTALL)
+    if m:
+        topics_str = m.group(1)
+        msg        = m.group(2).strip()
+    else:
+        topics_str = "system"
+        msg        = entry
+    topics     = [t.lower() for t in topics_str.split(",") if t]
+    main_topic = topics[0] if topics else "system"
+    severity   = "info"
+    for t in topics:
+        if t == "debug":    severity = "debug";   break
+        if t == "warning":  severity = "warning"; break
+        if t == "error":    severity = "err";     break
+        if t == "critical": severity = "crit";    break
+    icon = "ℹ️"
+    for kw, ic in _MT_TOPICS.items():
+        if kw in main_topic or any(kw in t for t in topics):
+            icon = ic; break
+    return {
+        "ts":       time.time(),
+        "src_ip":   src_ip,
+        "facility": "local0",
+        "severity": severity,
+        "topic":    main_topic,
+        "topics":   topics,
+        "icon":     icon,
+        "msg":      (topics_str + " " + msg)[:500],
+        "raw_msg":  msg[:300],
+    }
+
+
+def _parse_rfc3164(data: bytes, src_ip: str) -> dict:
+    """Parse standard RFC 3164 syslog with <pri> header."""
+    try:
+        text = data.decode("utf-8", errors="replace").strip()
+    except Exception:
+        text = ""
     pri = 0; msg = text
     m = _re.match(r"^<(\d+)>(.*)", text)
     if m:
         pri = int(m.group(1))
         msg = m.group(2).strip()
-
-    facility = _SYSLOG_FACILITY[pri >> 3] if (pri >> 3) < len(_SYSLOG_FACILITY) else "unknown"
-    severity = _SYSLOG_SEVERITY[pri & 0x7]
-
-    # Detect MikroTik topic from message prefix like "firewall,info forward"
+    facility_idx = pri >> 3
+    severity_idx = pri & 0x7
+    facility = _SYSLOG_FACILITY[facility_idx] if facility_idx < len(_SYSLOG_FACILITY) else "unknown"
+    severity = _SYSLOG_SEVERITY[severity_idx] if severity_idx < len(_SYSLOG_SEVERITY) else "info"
     topic = "system"
     for kw in _MT_TOPICS:
         if kw in msg.lower():
-            topic = kw
-            break
-
+            topic = kw; break
     return {
         "ts":       time.time(),
-        "src_ip":   addr[0],
+        "src_ip":   src_ip,
         "facility": facility,
         "severity": severity,
         "topic":    topic,
+        "topics":   [topic, severity],
         "icon":     _MT_TOPICS.get(topic, "ℹ️"),
         "msg":      msg[:500],
+        "raw_msg":  msg[:300],
     }
+
+
+def _parse_syslog(data: bytes, addr: tuple) -> list:
+    """
+    Parse one UDP packet. Returns a LIST of entry dicts — MikroTik often
+    packs multiple log records into a single datagram.
+    """
+    src_ip = addr[0]
+    try:
+        text = data.decode("utf-8", errors="replace").strip()
+    except Exception:
+        return []
+    if not text:
+        return []
+    # RFC 3164 (BSD syslog with <pri>)
+    if text.startswith("<") and ">" in text[:6]:
+        return [_parse_rfc3164(data, src_ip)]
+    # MikroTik plain format — split into individual entries
+    raw_entries = _split_mt_packet(data)
+    result = [_parse_mt_entry(e, src_ip) for e in raw_entries if e.strip()]
+    if not result:
+        result = [{
+            "ts":       time.time(),
+            "src_ip":   src_ip,
+            "facility": "unknown",
+            "severity": "info",
+            "topic":    "system",
+            "topics":   ["system"],
+            "icon":     "ℹ️",
+            "msg":      text[:500],
+            "raw_msg":  text[:300],
+        }]
+    return result
 
 
 def start_syslog_server(port: int = 514):
@@ -396,18 +498,19 @@ def start_syslog_server(port: int = 514):
             print(f"[syslog] listening UDP:{port}")
             while _syslog_running:
                 try:
-                    data, addr = sock.recvfrom(4096)
-                    entry = _parse_syslog(data, addr)
+                    # 65535 — max UDP payload; MikroTik concatenates entries
+                    data, addr = sock.recvfrom(65535)
+                    entries = _parse_syslog(data, addr)
                     with _syslog_lock:
-                        _syslog_entries.appendleft(entry)
+                        for entry in entries:
+                            _syslog_entries.appendleft(entry)
                 except socket.timeout:
                     continue
                 except Exception as e:
                     print(f"[syslog] recv error: {e}")
         except PermissionError:
             print(f"[syslog] permission denied on port {port}. "
-                  f"Try: sudo sysctl -w net.inet.udp.recvspace=65536 "
-                  f"or use port 5140 and forward from MikroTik")
+                  f"Use port >= 1024 (e.g. 5140) or run as root.")
             _syslog_running = False
         except Exception as e:
             print(f"[syslog] error: {e}")
@@ -428,7 +531,10 @@ def get_syslog_entries(limit: int = 200, topic: str = "",
                         src_ip: str = "", search: str = "") -> list:
     with _syslog_lock:
         entries = list(_syslog_entries)
-    if topic:  entries = [e for e in entries if e["topic"] == topic]
+    # 'topics' is now a list field; fall back to 'topic' string for compatibility
+    if topic:
+        entries = [e for e in entries
+                   if topic in e.get("topics", []) or e.get("topic") == topic]
     if src_ip: entries = [e for e in entries if e["src_ip"] == src_ip]
     if search:
         s = search.lower()

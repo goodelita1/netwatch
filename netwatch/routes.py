@@ -1,5 +1,5 @@
-from html import escape as _esc
 """Flask route definitions."""
+from html import escape as _esc
 import threading
 from flask import (Blueprint, jsonify, request, render_template,
                    session, redirect, url_for)
@@ -483,12 +483,12 @@ def get_email():
 def set_email():
     data = request.json or {}
     cfg  = load_email_cfg()
-    for k in ("smtp_host","smtp_port","smtp_user","smtp_password","smtp_from",
+    for k in ("smtp_host","smtp_port","smtp_user","smtp_from",
               "smtp_to","use_tls","enabled","notify_power","notify_device","notify_new_host"):
         if k in data: cfg[k] = data[k]
-    # Don't overwrite password if placeholder sent
-    if data.get("smtp_password") == "••••":
-        data.pop("smtp_password", None)
+    # Only overwrite password if a real value (not the UI placeholder) is sent
+    if data.get("smtp_password") and data["smtp_password"] != "••••":
+        cfg["smtp_password"] = data["smtp_password"]
     save_email_cfg(cfg)
     return jsonify({"ok": True})
 
@@ -1413,86 +1413,6 @@ def _mt_api(ip: str, fn):
     if not login:
         return {"ok": False, "error": "Немає облікових даних. Додайте логін/пароль до картки пристрою."}
     return _with_api(ip, login, password, fn)
-
-
-    # Step 2: Read initial data (some RouterOS versions send banner)
-    try:
-        s.settimeout(1.0)
-        banner = s.recv(256)
-        step("Initial banner", True, f"получено {len(banner)} байт: {banner[:60].hex()}")
-    except _sock.timeout:
-        step("Initial banner", True, "немає банера (нормально для RouterOS 7)")
-    except Exception as e:
-        step("Initial banner", False, str(e))
-
-    # Step 3: Send /login sentence
-    def enc_word(w):
-        enc = w.encode("utf-8")
-        n = len(enc)
-        pfx = bytes([n]) if n < 128 else bytes([(n>>8)|0x80, n&0xFF])
-        return pfx + enc
-
-    sentence = b"".join(enc_word(w) for w in
-                        ["/login", f"=name={login}", f"=password={password}"]) + b"\x00"
-    try:
-        s.settimeout(5)
-        s.sendall(sentence)
-        step("Send /login", True, f"отправлено {len(sentence)} байт")
-    except Exception as e:
-        step("Send /login", False, str(e))
-        s.close()
-        return jsonify({"steps": steps, "conclusion": "Ошибка отправки"})
-
-    # Step 4: Read response - raw bytes first
-    try:
-        s.settimeout(5)
-        raw = b""
-        while True:
-            try:
-                chunk = s.recv(1024)
-                if not chunk:
-                    break
-                raw += chunk
-                if len(raw) > 2048:
-                    break
-            except _sock.timeout:
-                break
-        step("Read response raw", True,
-             f"{len(raw)} байт: {raw[:80].hex()} | text: {raw[:80]!r}")
-    except Exception as e:
-        step("Read response raw", False, str(e))
-        s.close()
-        return jsonify({"steps": steps})
-
-    s.close()
-
-    # Step 5: Parse response — check !trap BEFORE !done
-    # RouterOS sends: !trap (error) then !done (end), OR just !done (success)
-    conclusion = "Неизвестно"
-    raw_str = raw.decode("utf-8", errors="replace")
-    if "!trap" in raw_str:
-        # Extract message from trap
-        import re as _re2
-        m = _re2.search(r"message=([^\x00]+)", raw_str)
-        msg = m.group(1).strip() if m else raw_str[:100]
-        conclusion = f"❌ ЛОГИН ОТКЛОНЁН — {msg}"
-        step("Parse response", False, f"!trap: {msg}")
-    elif "!done" in raw_str and "!trap" not in raw_str:
-        conclusion = "✅ ЛОГИН УСПЕШЕН — только !done, нет !trap"
-        step("Parse response", True, "!done без ошибок")
-    elif len(raw) > 4:
-        conclusion = "⚠️ Старый стиль RouterOS (MD5 challenge) или неожиданный ответ"
-        step("Parse response", None, f"raw hex: {raw[:40].hex()}")
-    else:
-        conclusion = "⚠️ Пустой ответ от роутера"
-        step("Parse response", False, "нет данных")
-
-    return jsonify({"steps": steps, "conclusion": conclusion,
-                    "raw_hex": raw[:120].hex(), "raw_text": raw[:120].decode("utf-8","replace")})
-
-
-
-
 
 
 # ── MikroTik system status ────────────────────────────────────────────────────
