@@ -193,7 +193,7 @@ async function doLogin() {
       err.textContent = d.error || 'Помилка входу';
     }
   } catch(e) {
-    err.textContent = 'Помилка з'єднання';
+    err.textContent = "Помилка з'єднання";
   }
   btn.disabled = false; btn.textContent = 'Увійти →';
 }
@@ -220,7 +220,7 @@ async function doVerify2FA() {
       document.getElementById('totpCode').focus();
     }
   } catch(e) {
-    err.textContent = 'Помилка з'єднання';
+    err.textContent = "Помилка з'єднання";
   }
   btn.disabled = false; btn.textContent = 'Підтвердити ✓';
 }
