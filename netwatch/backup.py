@@ -5,7 +5,7 @@ NetWatch — Auto-backup module.
 Хранит последние 30 бэкапов.
 Запускается как daemon-поток из app.py.
 """
-import os, shutil, time, threading, zipfile, glob
+import os, time, threading, zipfile, glob
 
 _HERE  = os.path.dirname(os.path.abspath(__file__))
 _ROOT  = os.path.dirname(_HERE)
@@ -28,9 +28,15 @@ def do_backup() -> str | None:
 
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
             if os.path.exists(_DB):
-                # SQLite hot-backup: copy via shutil to avoid partial write
+                # SQLite online backup via sqlite3 API — safe during WAL mode
+                # This is the only correct way: copies -wal/-shm implicitly
+                import sqlite3 as _sqlite3
                 tmp = _DB + ".backup_tmp"
-                shutil.copy2(_DB, tmp)
+                src_conn = _sqlite3.connect(_DB)
+                dst_conn = _sqlite3.connect(tmp)
+                src_conn.backup(dst_conn)
+                dst_conn.close()
+                src_conn.close()
                 zf.write(tmp, "netwatch.db")
                 os.unlink(tmp)
 
@@ -80,4 +86,3 @@ def backup_loop():
     while True:
         do_backup()
         time.sleep(_EVERY)
-        

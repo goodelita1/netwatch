@@ -1,5 +1,17 @@
 // NetWatch — Globals, utilities, device list, subnets, discovery, init, settings
 
+// ── Security: HTML escape for user-supplied data in innerHTML ────────────────
+function escHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g,  '&amp;')
+    .replace(/</g,  '&lt;')
+    .replace(/>/g,  '&gt;')
+    .replace(/"/g,  '&quot;')
+    .replace(/'/g,  '&#39;');
+}
+
+
 const TL={router:'Роутер',ap:'WiFi AP',camera:'Камера',client:'Клієнт',mobile:'Мобільний',server:'Сервер'};
 const TC={router:'tr2',ap:'ta',camera:'tc',client:'tk',mobile:'tm',server:'ts'};
 
@@ -352,15 +364,20 @@ function setPageSize(n){
 }
 
 async function fetchDevices(){
-  const r=await fetch('/api/devices'); const data=await r.json();
-  allDevices=data.devices;
-  if(data.last_scan){
-    const d=new Date(data.last_scan*1000);
-    document.getElementById('lastScan').textContent='Скан: '+d.toLocaleTimeString('ru-RU');
+  try{
+    const r=await fetch('/api/devices');
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const data=await r.json();
+    allDevices=data.devices;
+    if(data.last_scan){
+      const d=new Date(data.last_scan*1000);
+      document.getElementById('lastScan').textContent='Скан: '+d.toLocaleTimeString('uk-UA');
+    }
+    render();
+    for(const d of allDevices) ensureHistory(d.ip);
+  }catch(e){
+    console.error('[fetchDevices]', e);
   }
-  render();
-  // refresh sparkline history for all visible devices
-  for(const d of allDevices) ensureHistory(d.ip);
 }
 
 async function refreshAllHistory(){

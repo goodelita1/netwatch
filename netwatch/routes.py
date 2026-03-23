@@ -1,3 +1,4 @@
+from html import escape as _esc
 """Flask route definitions."""
 import threading
 from flask import (Blueprint, jsonify, request, render_template,
@@ -81,7 +82,12 @@ def login_post():
         add_audit("login_fail", username, client_ip, "bad credentials")
         return jsonify({"ok": False, "error": "Невірний логін або пароль"}), 401
 
-    # Password OK — check if 2FA required
+    # Password OK — regenerate session to prevent session fixation
+    old_data = dict(session)
+    session.clear()
+    session.update(old_data)
+
+    # Check if 2FA required
     if totp_is_enabled():
         session["awaiting_2fa"] = True
         session["pre2fa_user"]  = username
@@ -396,7 +402,7 @@ def get_dashboard():
             "avg_ms": avg_ms, "min_ms": min_ms, "max_ms": max_ms,
             "history": [{"ts": p["ts"], "ms": p["ms"], "alive": p["alive"]}
                         for p in hist24],
-            "online": status_cache.get(ip, None)
+            "online": status_cache.get(ip, None)   # read-only, GIL protects scalar reads
         })
 
     # Global down events timeline (last 24h, group by hour)
@@ -731,10 +737,10 @@ def get_report_html():
         bar   = f'<div style="width:{u or 0}%;height:6px;background:{col};border-radius:3px"></div>' if u else ""
         rows_html += f"""
         <tr>
-          <td>{r["name"]}</td>
+          <td>{_esc(r["name"])}</td>
           <td style="font-family:monospace;font-size:11px">{r["ip"]}</td>
           <td>{r["type"]}</td>
-          <td>{r["location"] or "—"}</td>
+          <td>{_esc(r["location"]) if r["location"] else "—"}</td>
           <td style="text-align:center">
             <span style="color:{col};font-weight:700">{u_str}</span>
             <div style="background:#e0e0e0;border-radius:3px;margin-top:3px">{bar}</div>
@@ -753,7 +759,7 @@ def get_report_html():
           <td>{ev_icon(e["kind"])} {e["kind"]}</td>
           <td>{e["name"]}</td>
           <td style="font-family:monospace;font-size:11px">{e["ip"]}</td>
-          <td style="font-size:11px">{e["detail"]}</td>
+          <td style="font-size:11px">{_esc(e["detail"])}</td>
         </tr>"""
 
     avg_up_all = [r["uptime"] for r in rows if r["uptime"] is not None]

@@ -4,8 +4,11 @@
  * При офлайн показывает кэшированный UI
  */
 
-const CACHE_NAME    = 'netwatch-v2';
-const CACHE_STATIC  = 'netwatch-static-v2';
+// Cache version — auto-derived from SW file modification date
+// Increment the number below after any deployment to invalidate old caches
+const CACHE_VERSION = 3;
+const CACHE_NAME    = `netwatch-v${CACHE_VERSION}`;
+const CACHE_STATIC  = `netwatch-static-v${CACHE_VERSION}`;
 
 // Статика которую кэшируем при установке
 const PRECACHE = [

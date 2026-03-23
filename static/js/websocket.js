@@ -50,10 +50,8 @@ async function _initWebSocket() {
     _wsConnected = false;
     _wsSetIndicator(false);
     console.warn('[ws] disconnected:', reason);
-    // If polling disconnect — just reconnect, don't show Poll
-    if (reason === 'transport close' || reason === 'ping timeout') {
-      setTimeout(() => { if (!_wsConnected) _ws.connect(); }, 1000);
-    }
+    // socket.io handles reconnection automatically via reconnection:true
+    // do NOT manually call _ws.connect() here — causes double reconnect
   });
 
   _ws.on('connect_error', (err) => {
@@ -190,4 +188,3 @@ function wsPingDevice(ip) {
     _ws.emit('ping_request', { ip });
   }
 }
-

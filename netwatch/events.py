@@ -72,7 +72,7 @@ def tg_send(text: str):
             _ureq.urlopen(
                 _ureq.Request(url, data=data,
                               headers={"Content-Type": "application/json"}),
-                timeout=8
+                timeout=5
             )
         except Exception as e:
             print(f"[tg] {chat_id}: {e}")
@@ -89,7 +89,7 @@ def tg_send_to(text: str, chat_id: str) -> bool:
         _ureq.urlopen(
             _ureq.Request(url, data=data,
                           headers={"Content-Type": "application/json"}),
-            timeout=8
+            timeout=5
         )
         return True
     except Exception as e:
@@ -123,7 +123,7 @@ def discord_send(text: str):
         _ureq.urlopen(
             _ureq.Request(cfg["webhook_url"], data=payload,
                           headers={"Content-Type": "application/json"}),
-            timeout=8
+            timeout=5
         )
     except Exception as e:
         print(f"[discord] {e}")
@@ -138,7 +138,7 @@ def discord_send_test() -> bool:
         _ureq.urlopen(
             _ureq.Request(cfg["webhook_url"], data=payload,
                           headers={"Content-Type": "application/json"}),
-            timeout=8
+            timeout=5
         )
         return True
     except Exception as e:
@@ -173,6 +173,7 @@ def email_send(subject: str, body: str):
     msg["Subject"] = subject
     msg["From"]    = cfg.get("smtp_from") or cfg["smtp_user"]
     msg["To"]      = cfg["smtp_to"]
+    srv = None
     try:
         if cfg.get("use_tls"):
             srv = smtplib.SMTP(cfg["smtp_host"], int(cfg["smtp_port"]), timeout=10)
@@ -182,9 +183,12 @@ def email_send(subject: str, body: str):
         if cfg.get("smtp_user") and cfg.get("smtp_password"):
             srv.login(cfg["smtp_user"], cfg["smtp_password"])
         srv.sendmail(msg["From"], [cfg["smtp_to"]], msg.as_string())
-        srv.quit()
     except Exception as e:
         print(f"[email] {e}")
+    finally:
+        if srv:
+            try: srv.quit()
+            except Exception: pass
 
 def email_send_test() -> bool:
     cfg = load_email_cfg()
@@ -228,7 +232,7 @@ def webhook_send(kind: str, ip: str, name: str, detail: str):
         _ureq.urlopen(
             _ureq.Request(cfg["url"], data=payload,
                           headers={"Content-Type": "application/json"}),
-            timeout=8
+            timeout=5
         )
     except Exception as e:
         print(f"[webhook] {e}")
@@ -356,13 +360,11 @@ def add_event(kind: str, ip: str, name: str, detail: str = "", notify: bool = Fa
             "INSERT INTO events (ts, kind, ip, name, detail) VALUES (?, ?, ?, ?, ?)",
             (ts, kind, ip, name, detail)
         )
-        # Keep max 5000 events (trim oldest)
-        _execute("""
-            DELETE FROM events WHERE id IN (
-                SELECT id FROM events ORDER BY ts ASC
-                LIMIT MAX(0, (SELECT COUNT(*) FROM events) - 5000)
-            )
-        """)
+        # Keep max 5000 events — trim in separate statement for correctness
+        _execute(
+            "DELETE FROM events WHERE id NOT IN "
+            "(SELECT id FROM events ORDER BY ts DESC LIMIT 5000)"
+        )
     # Always push to WebSocket clients (regardless of notify flag)
     try:
         from .socket_handlers import emit_new_event
